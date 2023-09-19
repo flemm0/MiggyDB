@@ -1,0 +1,9 @@
+setup.py
+DSCI_551_Database.egg-info/PKG-INFO
+DSCI_551_Database.egg-info/SOURCES.txt
+DSCI_551_Database.egg-info/dependency_links.txt
+DSCI_551_Database.egg-info/requires.txt
+DSCI_551_Database.egg-info/top_level.txt
+utils/__init__.py
+utils/database_funcs.py
+utils/my_cli.py

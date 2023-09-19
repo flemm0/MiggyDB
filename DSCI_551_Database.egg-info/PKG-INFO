@@ -1,0 +1,7 @@
+Metadata-Version: 2.1
+Name: DSCI-551-Database
+Version: 0.1
+Summary: Custom Database System
+Author: Flemming Wu
+Author-email: wuflemmi@usc.edu
+Requires-Python: >=3.10
