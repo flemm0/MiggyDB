@@ -2,10 +2,12 @@ import cmd
 import os
 import polars as pl
 
-data_dir = '/home/flemm0/school_stuff/USC_Fall_2023/DSCI551/Final_Project/data/'
+from src.utils import *
+
+data_dir = '/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/data/'
 
 class DatabaseCLI(cmd.Cmd):
-    prompt = 'PQL> '
+    prompt = '\U0001F911 > '
 
     def __init__(self):
         super().__init__()
@@ -44,24 +46,6 @@ class DatabaseCLI(cmd.Cmd):
         Useage:
             create_table name string id integer date_of_birth date
         '''
-
-        def infer_datatypes(type):
-            type = type.lower()
-            if type.startswith('int'):
-                return pl.Int64
-            elif type.startswith('str'):
-                return pl.Utf8
-            elif type.startswith('float'):
-                return pl.Float64
-            elif type == 'datetime':
-                return pl.Datetime
-            elif type.startswith('date'):
-                return pl.Date
-            elif type.startswith('bool'):
-                return pl.Boolean
-            elif type in ['none', 'null']:
-                return pl.Null
-        
         args = arg.split(',')
         if len(args) < 3:
             print('Invalid input. Please provide a table name, and at least one column name followed by its data type')
@@ -87,4 +71,4 @@ class DatabaseCLI(cmd.Cmd):
 
 if __name__ == '__main__':
     cli = DatabaseCLI()
-    cli.cmdloop('Welcome to the Custom CLI. Type "exit" to exit.')
+    cli.cmdloop('Welcome to Flemming\'s Database CLI. \U0001F60E Type "exit" to exit.')
