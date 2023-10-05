@@ -6,9 +6,12 @@ import os
 from subprocess import check_output
 import re
 import subprocess
+import pathlib
 
 import polars as pl
 import math
+
+pl.Config.set_tbl_hide_dataframe_shape(True)
 
 DATA_PATH = '/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/data/'
 TEST_DB_PATH = os.path.join(DATA_PATH, 'test')
@@ -123,32 +126,73 @@ def insert_into(database, table_name, columns, values):
     else:
         schema = pl.read_parquet_schema(latest_partition_path)
         data = pl.DataFrame({col: [val] for col, val in zip(columns, values)}, schema=schema)
+        data.write_parquet(latest_partition_path)
 
 
 
 
 # Read
 
-def query_data(name):
+def read_full_table(database, table_name):
     '''Queries table
     
     Since data is expected to be larger than the memory limit, flush results of query to /temp directory
     when 100 MB data limit is reached
     '''
-    path = os.path.join(TEST_DB_PATH, name + '.parquet')
-    data = pl.read_parquet(path)
-    return data.head()
+    base = pathlib.Path(os.path.join(DATA_PATH, database))
+    dataset = ds.dataset(base / table_name, format='parquet')
+    n_rows = dataset.count_rows()
+    n_cols = dataset.head(1).num_columns
+    
+    if len(dataset.files) == 1: # if only 1 partition, read it all in as it fits into the memory limits
+        data = pl.DataFrame._from_arrow(pq.read_table(dataset.files[0]))
+    else: # otherwise, read in first half of first partition, and last half of last partition
+        head_pf = pq.ParquetFile(dataset.files[0])
+        data = pl.DataFrame._from_arrow(head_pf.read_row_group(i=1)) # read first row group
+        tail_pf = pq.ParquetFile(dataset.files[-1])
+        data.extend(pl.DataFrame._from_arrow(tail_pf.read_row_group(i=tail_pf.metadata.num_row_groups - 1)))
+    
+    print(f'{n_rows} rows\t{n_cols} columns')
+    print(data)
 
-def group_by(name, keys, aggfunc):
-    data = query_data(name)
-    data.group_by(keys)
-    # perform aggregation function
+def write_query_to_file():
+    pass
 
-def projection(database, table_name, columns):
-    partitions = get_all_partitions(database=database, table_name=table_name)
-
+def projection(database, table_name, columns, new_column_names):
+    '''Queries a subset of columns
+    
+    Should be fast, parquet files are columnar-files and are optimized to read in columns.
+    '''
+    base = pathlib.Path(os.path.join(DATA_PATH, database))
+    dataset = ds.dataset(base / table_name, format='parquet')
+    n_rows = dataset.count_rows()
+    n_cols = len(columns)
+    
+    if len(dataset.files) == 1: # if only 1 partition, read it all in as it fits into the memory limits
+        data = pl.DataFrame._from_arrow(
+            pq.read_table(dataset.files[0], columns=columns),
+            schema=new_column_names
+        )
+    else: # otherwise, read in first half of first partition, and last half of last partition
+        head_pf = pq.ParquetFile(dataset.files[0])
+        data = pl.DataFrame._from_arrow( # read first row group
+            head_pf.read_row_group(i=1, columns=columns),
+            schema=new_column_names
+        ) 
+        tail_pf = pq.ParquetFile(dataset.files[-1])
+        data.extend(pl.DataFrame._from_arrow(
+            tail_pf.read_row_group(i=tail_pf.metadata.num_row_groups - 1, columns=columns),
+            schema=new_column_names
+            )
+        )
+    
+    print(f'{n_rows} rows\t{n_cols} columns')
+    print(data)
 
 def filter():
+    pass
+
+def group_by(name, keys, aggfunc):
     pass
 
 def join():
