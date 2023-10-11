@@ -159,7 +159,7 @@ which will cause results to be printed and temporary directory to be cleared
 '''
 
 def execute_query(database: str, table_name: str, select: bool, join: bool, filters: list, group: bool, 
-                  having: bool, projection: bool, distinct: bool, order: bool, limit: bool, offset: bool):
+                  having: bool, columns: list(list), distinct: bool, order: bool, limit: bool, offset: bool):
     step = 0
     query_id = 'query_' + datetime.datetime.now().strftime("%y%m%d_%H%M%S") 
     query_step_dir = query_id + '_' + str(step)
@@ -181,8 +181,22 @@ def execute_query(database: str, table_name: str, select: bool, join: bool, filt
         curr_query_path = Path(TEMP_DB_PATH / query_step_dir)
         if not curr_query_path.exists():
             Path.mkdir(curr_query_path)
-            for partition, name in filter(prev_query_path=prev_query_path, filters=filters):
-                pq.write_table(table=partition, where=(curr_query_path / name).with_suffix('.parquet'))
+        for partition, name in filter(prev_query_path=prev_query_path, filters=filters):
+            pq.write_table(table=partition, where=(curr_query_path / name).with_suffix('.parquet'))
+
+    if len(columns):
+        selected_cols = columns[0]
+        new_col_names = columns[1] # TODO set to selected_cols if no new names provided
+
+        prev_query_path = curr_query_path
+        step += 1
+        query_step_dir = query_id + '_' + str(step)
+        curr_query_path = Path(TEMP_DB_PATH / query_step_dir)
+        if not curr_query_path.exists():
+            Path.mkdir(curr_query_path)
+        for partition, name in projection(prev_query_path=prev_query_path, selected_cols=selected_cols, new_col_names=new_col_names):
+            pq.write_table(table=partition, where=(curr_query_path / name).with_suffix('.parquet'))
+
 
 def print_results_to_console(database, table_name):
     '''
@@ -205,6 +219,7 @@ def print_results_to_console(database, table_name):
     return data
 
 def read_table(database, table_name):
+    '''Reads specified table to temporary database'''
     dataset = ds.dataset(DATA_PATH / database / table_name, format='parquet')
     for partition in dataset.files:
         partition = Path(partition)
@@ -212,42 +227,27 @@ def read_table(database, table_name):
         yield data, partition.stem
 
 def filter(prev_query_path, filters):
+    '''
+    Reads intermediate query results from prev_query_path and performs filtering on data partitions.
+    Yields filtered data partitions and partition name
+    '''
     dataset = ds.dataset(prev_query_path, format='parquet')
     for partition in dataset.files:
         partition = Path(partition)
         data = pq.read_table(partition, filters=filters) # list of tuples e.g. ('acousticness', '<', 1)
         yield data, partition.stem
 
-def projection(database, table_name, columns, new_column_names):
-    '''Queries a subset of columns
-    
-    Should be fast, parquet files are columnar-files and are optimized to read in columns.
+def projection(prev_query_path, selected_cols, new_col_names):
     '''
-    base = Path(os.path.join(DATA_PATH, database))
-    dataset = ds.dataset(base / table_name, format='parquet')
-    n_rows = dataset.count_rows()
-    n_cols = len(columns)
-    
-    if len(dataset.files) == 1: # if only 1 partition, read it all in as it fits into the memory limits
-        data = pl.DataFrame._from_arrow(
-            pq.read_table(dataset.files[0], columns=columns),
-            schema=new_column_names
-        )
-    else: # otherwise, read in first half of first partition, and last half of last partition
-        head_pf = pq.ParquetFile(dataset.files[0])
-        data = pl.DataFrame._from_arrow( # read first row group
-            head_pf.read_row_group(i=1, columns=columns),
-            schema=new_column_names
-        ) 
-        tail_pf = pq.ParquetFile(dataset.files[-1])
-        data.extend(pl.DataFrame._from_arrow(
-            tail_pf.read_row_group(i=tail_pf.metadata.num_row_groups - 1, columns=columns),
-            schema=new_column_names
-            )
-        )
-    
-    print(f'{n_rows} rows\t{n_cols} columns')
-    return data
+    Reads intermediate query results from prev_query_path and selects only specified columns. Assigns new column names.
+    Yields filtered data partitions and partition name
+    '''
+    dataset = ds.dataset(prev_query_path, format='parquet')
+    for partition in dataset.files:
+        partition = Path(partition)
+        data = pq.read_table(partition, columns=selected_cols) # list of column names
+        data.rename_columns(new_col_names)
+        yield data, partition.stem
 
 def group_by(name, keys, aggfunc):
     pass
