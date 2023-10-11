@@ -8,6 +8,7 @@ import re
 import subprocess
 from pathlib import Path
 from collections import defaultdict
+import datetime
 
 import polars as pl
 import math
@@ -16,7 +17,7 @@ pl.Config.set_tbl_hide_dataframe_shape(True)
 
 DATA_PATH = Path('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/data/')
 TEST_DB_PATH = Path(DATA_PATH / 'test')
-TEMP_DATA_PATH = Path(DATA_PATH / 'temp')
+TEMP_DB_PATH = Path(DATA_PATH / 'temp')
 
 MAX_PARTITION_SIZE = 100 * 1024 * 1024
 
@@ -140,6 +141,14 @@ def insert_into(database, table_name, columns, values):
 '''
 Query operations should be as follows:
 
+query order: FROM <table> JOIN <table> WHERE <cond> GROUP BY <cols> HAVING <cond> SELECT <cols> DISTINCT <> ORDER BY <cols> LIMIT/OFFSET <cols>
+custom syntax FROM <table> MERGE_WITH <table> COND <cond> GROUP <cols> GROUP_COND <cond> COLS <cols>  
+
+- when a query is made, a directory will be created under the data/temp/ directory with a query id
+- for each step of the query, a directory will be created under query id directory where the partitions for query results of each step are stored
+- the first directory will store results from the FROM/JOIN query
+- the next step will read in results from the directory of the previous step
+
 - queries begin with the FROM or JOIN clauses, so these functions will take a database and table_name as input
 - the FROM clause will select the dataset needed and write table in batches to temporary directory
 - if this is the end of the query, read in head and tail of dataset in temp directory, print to console, and clear directory
@@ -149,19 +158,35 @@ which will cause results to be printed and temporary directory to be cleared
 
 '''
 
-def write_query_to_temp_dir(table, temp_dir_name, partition):
-    where = TEMP_DATA_PATH / temp_dir_name / partition
-    pq.write_table(table=table, where=where)
+def execute_query(database: str, table_name: str, select: bool, join: bool, filters: list, group: bool, 
+                  having: bool, projection: bool, distinct: bool, order: bool, limit: bool, offset: bool):
+    step = 0
+    query_id = 'query_' + datetime.datetime.now().strftime("%y%m%d_%H%M%S") 
+    query_step_dir = query_id + '_' + str(step)
     
+    curr_query_path = Path(TEMP_DB_PATH / query_step_dir)
+    if not curr_query_path.exists():
+        Path.mkdir(curr_query_path)
 
-def print_results_to_console(dataset):
-    pass
+    if select: # should be false if join is true
+        for partition, name in read_table('audio_features'):
+            pq.write_table(table=partition, where=(curr_query_path / name).with_suffix('.parquet'))
+    elif join: # should execute if select is false
+        pass
 
-def read_full_table(database, table_name):
-    '''Queries table
-    
-    Since data is expected to be larger than the memory limit, flush results of query to /temp directory
-    when 100 MB data limit is reached
+    if len(filters):
+        prev_query_path = curr_query_path
+        step += 1
+        query_step_dir = query_id + '_' + str(step)
+        curr_query_path = Path(TEMP_DB_PATH / query_step_dir)
+        if not curr_query_path.exists():
+            Path.mkdir(curr_query_path)
+            for partition, name in filter(prev_query_path=prev_query_path, filters=filters):
+                pq.write_table(table=partition, where=(curr_query_path / name).with_suffix('.parquet'))
+
+def print_results_to_console(database, table_name):
+    '''
+    TODO make changes so that it reads last "step" of query under temp database
     '''
     base = Path(os.path.join(DATA_PATH, database))
     dataset = ds.dataset(base / table_name, format='parquet')
@@ -178,6 +203,20 @@ def read_full_table(database, table_name):
     
     print(f'{n_rows} rows\t{n_cols} columns')
     return data
+
+def read_table(database, table_name):
+    dataset = ds.dataset(DATA_PATH / database / table_name, format='parquet')
+    for partition in dataset.files:
+        partition = Path(partition)
+        data = pq.read_table(partition)
+        yield data, partition.stem
+
+def filter(prev_query_path, filters):
+    dataset = ds.dataset(prev_query_path, format='parquet')
+    for partition in dataset.files:
+        partition = Path(partition)
+        data = pq.read_table(partition, filters=filters) # list of tuples e.g. ('acousticness', '<', 1)
+        yield data, partition.stem
 
 def projection(database, table_name, columns, new_column_names):
     '''Queries a subset of columns
@@ -209,16 +248,6 @@ def projection(database, table_name, columns, new_column_names):
     
     print(f'{n_rows} rows\t{n_cols} columns')
     return data
-
-def filter(database, table_name, filters):
-    # use pq.read_table(..., filter=pyarrow.compute.Expression)
-    base = Path(os.path.join(DATA_PATH, database))
-    dataset = ds.dataset(base / table_name, format='parquet')
-
-    for partition in dataset.files:
-        data = pq.read_table(partition, filters=filters) # list of tuples e.g. ('acousticness', '<', 1)
-        data = pl.DataFrame._from_arrow(data)
-        print(data)
 
 def group_by(name, keys, aggfunc):
     pass
