@@ -159,7 +159,7 @@ which will cause results to be printed and temporary directory to be cleared
 '''
 
 def execute_query(database: str, table_name: str, select: bool, join: bool, filters: list, group: bool, 
-                  having: bool, columns: list(list), distinct: bool, order: bool, limit: bool, offset: bool):
+                  having: bool, columns: [list], distinct: bool, order: bool, limit: bool, offset: bool):
     step = 0
     query_id = 'query_' + datetime.datetime.now().strftime("%y%m%d_%H%M%S") 
     query_step_dir = query_id + '_' + str(step)
