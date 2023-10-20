@@ -1,2 +1,4 @@
 data/*/*/*.parquet
 data/input/*.*
+testing/*/*.parquet
+
