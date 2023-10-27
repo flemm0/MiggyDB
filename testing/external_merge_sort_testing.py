@@ -1,84 +1,118 @@
 #%%
+
+# create dummy data
+import polars as pl
+import names
+import random
+import os
+
+## setup
+random.seed(999)
+
+df1 = pl.DataFrame({
+    'name': [names.get_first_name() for i in range(1000)],
+    'age': [random.randint(0, 100) for i in range(1000)]
+})
+df2 = pl.DataFrame({
+    'name': [names.get_first_name() for i in range(1000)],
+    'age': [random.randint(0, 100) for i in range(1000)]
+})
+df3 = pl.DataFrame({
+    'name': [names.get_first_name() for i in range(1000)],
+    'age': [random.randint(0, 100) for i in range(1000)]
+})
+df4 = pl.DataFrame({
+    'name': [names.get_first_name() for i in range(1000)],
+    'age': [random.randint(0, 100) for i in range(1000)]
+})
+
+df1.write_parquet('/Users/candicewu/USC_Fall_2023/DSCI551-Final_Project/testing/step_1/data_1.parquet')
+df2.write_parquet('/Users/candicewu/USC_Fall_2023/DSCI551-Final_Project/testing/step_1/data_2.parquet')
+df3.write_parquet('/Users/candicewu/USC_Fall_2023/DSCI551-Final_Project/testing/step_1/data_3.parquet')
+df4.write_parquet('/Users/candicewu/USC_Fall_2023/DSCI551-Final_Project/testing/step_1/data_4.parquet')
+
+#%%
 import pyarrow as pa
 import pyarrow.parquet as pq
 import polars as pl
 from pathlib import Path
 import pyarrow.dataset as ds
 
-base = Path('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/testing')
+# linux
+# base = Path('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/testing')
+
+# mac
+base = Path('/Users/candicewu/USC_Fall_2023/DSCI551-Final_Project/testing/')
 
 dataset = ds.dataset(base / 'step_1', format='parquet')
+
+sort_col = 'age'
 # %%
 
 # sort
-step_2_dir = base / 'step_2'
 
-for file in dataset.files:
-    data = pl.read_parquet(file).rows()
-    data.sort(key=lambda x: x[1])
-    data = pl.DataFrame(data, schema=list(pl.read_parquet_schema(file).keys()))
-    out_file = file.split('.')[0] + '_sorted.parquet'
-    data.write_parquet(step_2_dir / out_file)
+def partial_sort(prev_step_path, sort_col):
+    dataset = ds.dataset(prev_step_path, format='parquet')
+
+    for partition in dataset.files:
+        partition = Path(partition)
+        data = pl.read_parquet(partition)
+        idx = data.columns.index(sort_col)
+        data = data.rows()
+        data.sort(key=lambda x: x[idx])
+        data = pl.DataFrame(data, schema=list(pl.read_parquet_schema(partition).keys())).to_arrow()
+        yield data, partition.stem
+
+for partition, name in partial_sort('./step_1/', 'age'):
+    pq.write_table(table=partition, where=(base / 'step_2' / name).with_suffix('.parquet'))
 
 # %%
 
 # merge
 # 100 MB is the memory limit
-dataset = ds.dataset(base / 'step_2', format='parquet')
-n_buffers = len(dataset.files) + 1
+# use 1 KB (1024 bytes) as limit for this example
 
-sort_col = 'age'
+# dataset = ds.dataset(base / 'step_2', format='parquet')
 
-# create iterators of each of the files
-iterators = {}
-for idx, file in enumerate(dataset.files):
-    pf = pq.ParquetFile(file)
-    num_rows = pf.metadata.num_rows
-    iterators[Path(file).stem] = pf.iter_batches(batch_size=num_rows // n_buffers)
+def merge_sorted_runs(prev_step_path, sort_col):
+    dataset = ds.dataset(prev_step_path, format='parquet')
+    n_buffers = len(dataset.files) + 1 # add 1 for output buffer
 
-chunk_1 = next(iterators['data_1_sorted'], False)
-chunk_2 = next(iterators['data_2_sorted'], False)
-chunk_3 = next(iterators['data_3_sorted'], False)
-chunk_4 = next(iterators['data_4_sorted'], False)
+    # create iterators of each of the files
+    iterators = {}
+    for partition in dataset.files:
+        pf = pq.ParquetFile(partition)
+        num_rows = pf.metadata.num_rows
+        iterators[Path(partition).stem] = pf.iter_batches(batch_size=num_rows // n_buffers)
 
-merged_data = []
-i = j = k = l = 0
-while chunk_1 and chunk_2 and chunk_3 and chunk_4:
-    current_min = min(
-        chunk_1.column(sort_col)[i].as_py(),
-        chunk_2.column(sort_col)[j].as_py(),
-        chunk_3.column(sort_col)[k].as_py(),
-        chunk_4.column(sort_col)[l].as_py(),
-    )
-    if current_min == (chunk_1.column('age')[i].as_py()):
-        merged_data.append(pl.from_arrow(chunk_1).rows()[i])
-        i += 1
-        if i >= len(chunk_1):
-            chunk_1 = next(iterators['data_1_sorted'], False)
-            i = 0
-    elif current_min == (chunk_2.column('age')[j].as_py()):
-        merged_data.append(pl.from_arrow(chunk_2).rows()[j])
-        j += 1
-        if j >= len(chunk_2):
-            chunk_2 = next(iterators['data_2_sorted'], False)
-            j = 0
-    elif current_min == (chunk_3.column('age')[k].as_py()):
-        merged_data.append(pl.from_arrow(chunk_3).rows()[k])
-        k += 1
-        if k >= len(chunk_3):
-            chunk_3 = next(iterators['data_3_sorted'], False)
-            k = 0
-    else:
-        merged_data.append(pl.from_arrow(chunk_4).rows()[l])
-        l += 1
-        if l >= len(chunk_4):
-            chunk_4 = next(iterators['data_4_sorted'], False)
-            l = 0
+    # store chunks of iterators in dictionary
+    chunks = {}
+    for name, iterator in iterators.items():
+        chunks[name] = next(iterator, False)
+
+    # create tuple iterators for individual rows
+    # TODO change to use dictionary like the chunk iterator
+    row_iterators = [iter([tuple(r.values()) for r in c.to_pylist()]) for c in chunks.values()]
+    rows = [next(row_iterator, None) for row_iterator in row_iterators] # list of tuples, 1 for each chunk
+    merged_data = []
+
+    while any(chunks.values()):
+        min_tuple = min(rows, key=lambda x: x[1])
+        min_index = rows.index(min_tuple)
+        merged_data.append(min_tuple)
+        # if len(merged_data) > min([len(chunk) for chunk in chunks.values]):
+        #   write_table()
+        rows[min_index] = next(row_iterators[min_index], None)
+        if not rows[min_index]:
+            pass
+            # call `next()` on the chunk to load next chunk
 
     # add logic to check size of merged dataset, and write to disk once reached
 
-print(merged_data)
+    print(merged_data)
 # %%
+
+# check
 dataset = ds.dataset(base / "step_2", format="parquet")
 
 dataset.to_table().sort_by('age').to_pandas().head(10)
