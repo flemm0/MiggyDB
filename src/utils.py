@@ -272,8 +272,74 @@ def hash_join(table1, index1, table2, index2):
             for entry in hash_table[row[index2]]:
                 result.append(entry + row)
 
-def order():
-    pass
+def partial_sort(prev_step_path, sort_col):
+    '''Sorts each partition of a table sequentially and writes to disk'''
+    dataset = ds.dataset(prev_step_path, format='parquet')
+    sort_idx = dataset.schema.names.index(sort_col)
+
+    for partition in dataset.files:
+        partition = Path(partition)
+        data = pl.read_parquet(partition).rows()
+        data.sort(key=lambda x: x[sort_idx])
+        data = pl.DataFrame(data, schema=list(pl.read_parquet_schema(partition).keys())).to_arrow()
+        yield data, partition.stem
+
+def merge_sorted_runs(prev_step_path, sort_col):
+    '''Merge phase of external merge sort'''
+    dataset = ds.dataset(prev_step_path, format='parquet')
+    sort_idx = dataset.schema.names.index(sort_col)
+    n_buffers = len(dataset.files) + 1 # add 1 for output buffer
+    out_buffer_len = dataset.count_rows() // len(dataset.files)
+
+    # create iterators of each of the files
+    chunk_iterators = {}
+    for partition in dataset.files:
+        pf = pq.ParquetFile(partition)
+        num_rows = pf.metadata.num_rows
+        chunk_iterators[Path(partition).stem] = pf.iter_batches(batch_size=num_rows // n_buffers)
+    out_partition_names = list(chunk_iterators.keys())
+    # store chunks of iterators in dictionary
+    chunks = {
+        name: next(chunk_iterator, False) for name, chunk_iterator in chunk_iterators.items()
+    }
+
+    # create tuple iterators for individual rows 
+    row_iterators = {
+        name: iter([tuple(t.values()) for t in chunk.to_pylist()]) for name, chunk in chunks.items()
+    }
+
+    # dict of tuples, 1 for each chunk
+    rows = { 
+        name: next(row_iterator, None) for name, row_iterator in row_iterators.items()
+     } 
+    
+    merged_data = [] # list to hold output buffer
+    out_partition_counter = 0
+    while any(chunks.values()):
+        min_tuple = min(rows.values(), key=lambda x: x[sort_idx])
+        min_chunk = list(filter(lambda x: rows[x] == min_tuple, rows))[0]
+        merged_data.append(min_tuple)
+        # write to disk if output buffer is full
+        if len(merged_data) > out_buffer_len:
+          yield pl.DataFrame(merged_data, schema=dataset.schema.names).to_arrow(), out_partition_names[out_partition_counter]
+          out_partition_counter += 1
+          merged_data = []
+        rows[min_chunk] = next(row_iterators[min_chunk], None)
+        if not rows[min_chunk]:
+            # update chunks dict, load next chunk
+            chunks[min_chunk] = next(chunk_iterators[min_chunk], False)
+            # if still chunks to iterate, load nexxt
+            if chunks[min_chunk] != False:
+                # update row_iterators dict - create new tuple iterator
+                row_iterators[min_chunk] = iter([tuple(t.values()) for t in chunks[min_chunk].to_pylist()])
+                # update rows_dict
+                rows[min_chunk] = next(row_iterators[min_chunk], False)
+            # if no more chunks, remove from dict
+            else:
+                del rows[min_chunk]
+
+    yield pl.DataFrame(merged_data, schema=dataset.schema.names).to_arrow(), out_partition_names[out_partition_counter]
+
 
 
 # Update
