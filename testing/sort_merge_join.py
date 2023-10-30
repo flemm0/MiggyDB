@@ -1,138 +1,97 @@
 # %%
 import pyarrow as pa
+import pyarrow.parquet as pq
 from pathlib import Path
 import pyarrow.dataset as ds
 import polars as pl
-from sys import getsizeof
 
-table1 = pa.Table.from_arrays(
-    [
-        pa.array(['foo', 'bar', 'foobar', 'baz', 'fizz', 'buzz']),
-        pa.array([22, 28, 31, 31, 44, 58])
-    ], 
-    names=['usr', 'id']
-)
+import random
+import names
 
-table2 = pa.Table.from_arrays(
-    [
-        pa.array([28, 28, 31, 31, 42, 58]),
-        pa.array([103, 104, 101, 102, 142, 107])
-    ], 
-    names=['id', 'pid']
-)
-#%%
-def get_scalar(table: pa.Table, col: str, idx: int):
-    return table.column(col)[idx].as_py()
+# create data
 
-def concat_tuples(table1: pa.Table, idx1, table2: pa.Table, idx2,):
-    l_row = tuple(table1.slice(offset=idx1, length=1).to_pylist()[0].values())
-    r_row = tuple(table2.slice(offset=idx2, length=1).to_pylist()[0].values())
-    return l_row + r_row # TODO change to eliminate duplicate columns?
+ids = [random.randint(1, 10000) for i in range(1000)]
 
-def sort_merge_join(table1: pa.Table, table2: pa.Table, merge_col: str):
-    result = []
-    mark = None
-    l, r = 0, 0
-    while l < table1.num_rows and r < table2.num_rows:
-        if not mark:
-            while get_scalar(table1, merge_col, l) < get_scalar(table2, merge_col, r):
-                l += 1
-            while get_scalar(table1, merge_col, l) > get_scalar(table2, merge_col, r):
-                r += 1
-            mark = r
-        if get_scalar(table1, merge_col, l) == get_scalar(table2, merge_col, r):
-            result.append(concat_tuples(table1, l, table2, r))
-            r += 1
-        else:
-            r = mark
-            l += 1
-            mark = None
-    return result
+table1 = pl.DataFrame({'id': ids, 'name': [names.get_first_name() for i in range(1000)]}).to_arrow()
+table2 = pl.DataFrame({'department': [
+        random.choice(['HR', 'Engineering', 'Management', 'Janitorial', 'Sales', 'IT']) for i in range(1000)
+    ],'id': ids}).to_arrow()
 
-sort_merge_join(table1, table2, merge_col='id')
+for num, batch in enumerate(table1.to_batches(table1.num_rows / 4)):
+    df = pl.DataFrame._from_arrow(batch)
+    df.write_parquet(f'employees/employees_{num}.parquet')
+
+for num, batch in enumerate(table2.to_batches(table2.num_rows / 4)):
+    df = pl.DataFrame._from_arrow(batch)
+    df.write_parquet(f'departments/departments_{num}.parquet')
 # %%
-'''
-out-of-memory sort-merge join requires 3 buffers:
-1 for left table
-1 for right table
-1 for output buffer
-the output buffer should be double the size of an input buffer, 
-since it'll hold combined tuples from left and right
+def sort_merge_join(r_path, s_path, join_col):
+    dataset_r = ds.dataset(r_path, format='parquet')
+    join_idx_r = dataset_r.schema.names.index(join_col)
+    dataset_s = ds.dataset(s_path, format='parquet')
+    join_idx_s = dataset_s.schema.names.index(join_col)
 
-left_nrows / 4, right_nrows / 4
-'''
+    ## TODO Need to sort relations first
 
-def sort_merge_join(dataset1: ds.Dataset, dataset2: ds.Dataset, merge_col: str):
-    l_n_files = len(dataset1.files)
-    l_total_rows = dataset1.count_rows()
-    iterator_1 = dataset1.to_batches(batch_size=(l_total_rows // l_n_files) // 4)
-
-    r_n_files = len(dataset2.files)
-    r_total_rows = dataset2.count_rows()
-    iterator_2 = dataset2.to_batches(batch_size=(r_total_rows // r_n_files) // 4)
-
-    l_buffer = next(iterator_1, False)
-    r_buffer = next(iterator_2, False)
-    result = []
-    mark = None
-    l, r = 0, 0
-
-    while l_buffer and r_buffer:
-        if not mark: 
-            while get_scalar(l_buffer, merge_col, l) < get_scalar(r_buffer, merge_col, r):
-                l += 1
-                if l >= len(l_buffer):
-                    l_buffer = next(iterator_1, False)
-                    l = 0
-            while get_scalar(l_buffer, merge_col, l) > get_scalar(r_buffer, merge_col, r):
-                r += 1
-                if r >= len(r_buffer):
-                    r_buffer = next(iterator_2, False)
-                    r = 0
-            mark = r
-        if get_scalar(l_buffer, merge_col, l) == get_scalar(r_buffer, merge_col, r):
-            result.append(concat_tuples(table1, l, table2, r))
-            if getsizeof(result) > 50 * (2 ** 20):
-                pl.DataFrame(result).write_parquet('./step_3/')
-            r += 1
-            if r >= len(r_buffer):
-                r_buffer = next(iterator_2, False)
-                r = 0
-        else:
-            r = mark
-            l += 1
-            if l >= len(l_buffer):
-                l_buffer = next(iterator_1, False)
-                l = 0
-            mark = None
-    
-#%%
-
-base = Path('/Users/candicewu/USC_Fall_2023/DSCI551-Final_Project/testing')
-dataset = ds.dataset(base / 'step_1', format='parquet')
-
-iterator = dataset.to_batches(batch_size=2)
-data = next(iterator)
-
-# %%
-
-## nested-loop join
-import pyarrow.parquet as pq
-import polars as pl
-
-def nested_loop_join(prev_step_path_r, prev_step_path_s, join_col):
-    dataset_r = ds.dataset(prev_step_path_r, format='parquet')
-    dataset_s = ds.dataset(prev_step_path_s, format='parquet')
+    n_buffers = len(dataset_r.files) + len(dataset_s.files) + 1
 
 
     chunk_iterators_r, chunk_iterators_s = {}, {}
     for partition_r, partition_s in zip(dataset_r.files, dataset_s.files):
         pf_r, pf_s = pq.ParquetFile(partition_r), pq.ParquetFile(partition_s)
-        pass
+        num_rows_r, num_rows_s = pf_r.metadata.num_rows, pf_s.metadata.num_rows
+        chunk_iterators_r[Path(partition_r).stem] = pf_r.iter_batches(batch_size=num_rows_r // n_buffers)
+        chunk_iterators_s[Path(partition_s).stem] = pf_s.iter_batches(batch_size=num_rows_s // n_buffers)
+    
+    chunks_r = {
+        name: next(chunk_iterator_r, False) for name, chunk_iterator_r in chunk_iterators_r.items()
+    }
+    chunks_s = {
+        name: next(chunk_iterator_s, False) for name, chunk_iterator_s in chunk_iterators_s.items()
+    }
+
+    row_iterator_r = {
+        name: iter([tuple(t.values()) for t in chunk.to_pylist()]) for name, chunk in chunks_r.items()
+    }
+    row_iterator_s = {
+        name: iter([tuple(t.values()) for t in chunk.to_pylist()]) for name, chunk in chunks_s.items()
+    }
+
+    rows_r = {name: next(row_iterator, None) for name, row_iterator in row_iterator_r.items()}
+    rows_s = {name: next(row_iterator, None) for name, row_iterator in row_iterator_s.items()}
+
+    joined_data, r_tuples, s_tuples = [], [], []
+
+    while any(chunks_r.values()) and any(chunks_s.values()):
+        min_value = min(min(rows_r, key=lambda x: x[join_idx_r])[join_idx_r], min(rows_s, key=lambda x: x[join_idx_r])[sort_idx_s])
+        for name, row in rows_r.items():
+            while row[join_idx_r] == min_value:
+                r_tuples.append(row)
+                rows_r[name] = next(row_iterator_r)
+                if not rows_r[name]:
+                    chunks_r[name] = next(chunk_iterators_r[name], False)
+                    if chunks_r[name] != False:
+                        row_iterator_r[name] = iter([tuple(t.values()) for t in chunks_r.to_pylist()])
+                        rows_r[name] = next(row_iterator_r[name], False)
+                    else:
+                        del rows_r[name]
+        for name, row in rows_s.items():
+            while row[join_idx_s] == min_value:
+                s_tuples.append(row)
+                rows_s[name] = next(row_iterator_s)
+                if not rows_s[name]:
+                    chunks_s[name] = next(chunk_iterators_s[name], False)
+                    if chunks_s[name] != False:
+                        row_iterator_s[name] = iter([tuple(t.values()) for t in chunks_s.to_pylist()])
+                        rows_s[name] = next(row_iterator_s[name], False)
+                    else:
+                        del rows_s[name]
+        joined_data.append([(r + s) for r in r_tuples for s in s_tuples])
+        r_tuples, s_tuples = [], []
+
+    return joined_data
 
 
-
-# [(r + s) for r in l1 for s in l2]
 # %%
 # pyarrow.parquet.ParquetWriter -- incrementally writing to parquet file
 
@@ -158,5 +117,3 @@ if writer:
 
 df = pl.read_parquet(filepath)
 print(df)
-
-# %%
