@@ -116,7 +116,7 @@ def merge_sorted_runs(prev_step_path, sort_col):
         if not rows[min_chunk]:
             # update chunks dict, load next chunk
             chunks[min_chunk] = next(chunk_iterators[min_chunk], False)
-            # if still chunks to iterate, load nexxt
+            # if still chunks to iterate, load next
             if chunks[min_chunk] != False:
                 # update row_iterators dict - create new tuple iterator
                 row_iterators[min_chunk] = iter([tuple(t.values()) for t in chunks[min_chunk].to_pylist()])
