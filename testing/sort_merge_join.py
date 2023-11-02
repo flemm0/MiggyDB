@@ -80,7 +80,8 @@ def sort_merge_join(r_path, s_path, join_col):
     rows_r = {name: next(row_iterator, None) for name, row_iterator in row_iterator_r.items()}
     rows_s = {name: next(row_iterator, None) for name, row_iterator in row_iterator_s.items()}
 
-    joined_data, r_tuples, s_tuples = [], [], []
+    r_tuples, s_tuples = [], []
+    #joined_data = []
 
     while any(chunks_r.values()) and any(chunks_s.values()):
         min_value = min(min([val for val in rows_r.values() if val], key=lambda x: x[join_idx_r])[join_idx_r], min([val for val in rows_s.values() if val], key=lambda x: x[join_idx_s])[join_idx_s])
@@ -108,20 +109,42 @@ def sort_merge_join(r_path, s_path, join_col):
                     else:
                         rows_s[name] = None
                         break
-        #joined_data.append([(r + s) for r in r_tuples for s in s_tuples])
         yield [(r + s) for r in r_tuples for s in s_tuples]
         r_tuples, s_tuples = [], []
-
+        
     #return joined_data
 
 #sort_merge_join('./step_1/r', './step_1/s', 'id')
 #%%
 output_file_path = 'output.txt'
+
+line_count = 0
 with open(output_file_path, 'w') as file:
     for data in sort_merge_join('./step_1/r', './step_1/s', 'id'):
         for tuple_data in data:
             file.write(str(tuple_data).rstrip() + "\n")
+            line_count += 1
 
+import ast
+import os
+import math
+
+n_partitions = math.ceil(os.path.getsize(output_file_path) / ((1024 ** 2) * 100))
+partition_counter = 0
+join_col = 'id'
+schema_r = [name + 'x' if name == join_col else name for name in ds.dataset('step_1/r/').schema.names]
+schema_s = [name + 'y' if name == join_col else name for name in ds.dataset('step_1/s/').schema.names]
+schema = schema_r + schema_s
+with open(output_file_path, 'r') as file:
+    lines = []
+    for line in file:
+        lines.append(ast.literal_eval(line.rstrip()))
+        if len(lines) > line_count // n_partitions:
+            pl.DataFrame(lines, schema=schema).write_parquet(file=f'step_1/rs_joined/data_{partition_counter}.parquet')
+            partition_counter += 1
+            lines = []
+    if lines:
+        pl.DataFrame(lines, schema=schema).write_parquet(file=f'step_1/rs_joined/data_{partition_counter}.parquet')
 # %%
 # pyarrow.parquet.ParquetWriter -- incrementally writing to parquet file
 

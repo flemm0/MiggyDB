@@ -9,6 +9,8 @@ import subprocess
 from pathlib import Path
 from collections import defaultdict
 import datetime
+import ast
+import shutil
 
 import polars as pl
 import math
@@ -136,8 +138,6 @@ def insert_into(database, table_name, columns, values):
 
 # Read
 
-## TODO change functions to utilize tempfile.TemporaryDirectory() to flush immediate results to disk
-
 '''
 Query operations should be as follows:
 
@@ -158,26 +158,65 @@ which will cause results to be printed and temporary directory to be cleared
 
 '''
 
-def execute_query(database: str, table_name: str, select: bool, join: bool, filters: list, group: bool, 
-                  having: bool, columns: [list], distinct: bool, order: bool, limit: bool, offset: bool):
+def execute_query(database: str, table_name: str, select: bool, 
+                  join: bool, join_col: str, join_table_name: str,
+                  filters: list, group: bool, having: bool, columns: [list], 
+                  distinct: bool, order: bool, sort_col: str, limit: bool, offset: bool):
     step = 0
     query_id = 'query_' + datetime.datetime.now().strftime("%y%m%d_%H%M%S") 
-    query_step_dir = query_id + '_' + str(step)
+    query_step_dir = f'{query_id}_{step}'
     
     curr_query_path = Path(TEMP_DB_PATH / query_step_dir)
     if not curr_query_path.exists():
         Path.mkdir(curr_query_path)
 
     if select: # should be false if join is true
-        for partition, name in read_table('audio_features'):
+        for partition, name in read_table(database=database, table_name=table_name):
             pq.write_table(table=partition, where=(curr_query_path / name).with_suffix('.parquet'))
     elif join: # should execute if select is false
-        pass
+        # partial sort
+        Path.mkdir(curr_query_path / 'r')
+        Path.mkdir(curr_query_path / 's')
+        for partition, name in partial_sort(table_name, join_col):
+            pq.write_table(table=partition, where=(curr_query_path / 'r' / name).with_suffix('.parquet'))
+        for partition, name in partial_sort(join_table_name, join_col):
+            pq.write_table(table=partition, where=(curr_query_path / 's' / name).with_suffix('.parquet'))
+
+        # merge join
+        output_file_path = curr_query_path / 'output.txt'
+        line_count = 0
+        # write algorithm outputs to single txt file
+        with open(output_file_path, 'w') as file:
+            for data in sort_merge_join((curr_query_path / 'r'), (curr_query_path / 's'), join_col):
+                for tuple_data in data:
+                    file.write(str(tuple_data).rstrip() + "\n")
+                    line_count += 1
+        # convert txt file back to partitioned parquet files
+        n_partitions = math.ceil(os.path.getsize(output_file_path) / MAX_PARTITION_SIZE)
+        partition_counter = 0
+        schema_r = [name + 'x' if name == join_col else name for name in ds.dataset('step_1/r/').schema.names]
+        schema_s = [name + 'y' if name == join_col else name for name in ds.dataset('step_1/s/').schema.names]
+        schema = schema_r + schema_s
+        with open(output_file_path, 'r') as file:
+            lines = []
+            for line in file:
+                lines.append(ast.literal_eval(line.rstrip()))
+                if len(lines) > line_count // n_partitions:
+                    name = f'data_{partition_counter}.parquet'
+                    pl.DataFrame(lines, schema=schema).write_parquet(file=(curr_query_path / name))
+                    partition_counter += 1
+                    lines = []
+            if lines:
+                name = f'data_{partition_counter}.parquet'
+                pl.DataFrame(lines, schema=schema).write_parquet(file=(curr_query_path / name))
+        # clean up directories
+        shutil.rmtree(curr_query_path / 'r')
+        shutil.rmtree(curr_query_path / 's')
 
     if len(filters):
         prev_query_path = curr_query_path
         step += 1
-        query_step_dir = query_id + '_' + str(step)
+        query_step_dir = f'{query_id}_{step}'
         curr_query_path = Path(TEMP_DB_PATH / query_step_dir)
         if not curr_query_path.exists():
             Path.mkdir(curr_query_path)
@@ -190,13 +229,24 @@ def execute_query(database: str, table_name: str, select: bool, join: bool, filt
 
         prev_query_path = curr_query_path
         step += 1
-        query_step_dir = query_id + '_' + str(step)
+        query_step_dir = f'{query_id}_{step}'
         curr_query_path = Path(TEMP_DB_PATH / query_step_dir)
         if not curr_query_path.exists():
             Path.mkdir(curr_query_path)
         for partition, name in projection(prev_query_path=prev_query_path, selected_cols=selected_cols, new_col_names=new_col_names):
             pq.write_table(table=partition, where=(curr_query_path / name).with_suffix('.parquet'))
 
+    if order:
+        prev_query_path = curr_query_path
+        step += 1
+        query_step_dir = f'{query_id}_{step}'
+        if not curr_query_path.exists():
+            Path.mkdir(curr_query_path)
+        for partition, name in partial_sort(prev_query_path, sort_col):
+            pq.write_table(table=partition, where=(curr_query_path / 'partial_sorted' / name).with_suffix('.parquet'))
+        for chunk, name in merge_sorted_runs(Path(curr_query_path / 'partial_sorted'), sort_col):
+            pq.write_table(table=partition, where=(curr_query_path / name).with_suffix('.parquet'))
+        shutil.rmtree(curr_query_path / 'partial_sorted')
 
 def print_results_to_console(database, table_name):
     '''
@@ -340,7 +390,70 @@ def merge_sorted_runs(prev_step_path, sort_col):
 
     yield pl.DataFrame(merged_data, schema=dataset.schema.names).to_arrow(), out_partition_names[out_partition_counter]
 
+def sort_merge_join(r_path, s_path, join_col):
+    '''r_path and s_path should point to sorted directories of sorted partitioned files'''
+    dataset_r = ds.dataset(r_path, format='parquet')
+    join_idx_r = dataset_r.schema.names.index(join_col)
+    dataset_s = ds.dataset(s_path, format='parquet')
+    join_idx_s = dataset_s.schema.names.index(join_col)
 
+    n_buffers = len(dataset_r.files) + len(dataset_s.files) + 1
+
+    chunk_iterators_r, chunk_iterators_s = {}, {}
+    for partition_r, partition_s in zip(dataset_r.files, dataset_s.files):
+        pf_r, pf_s = pq.ParquetFile(partition_r), pq.ParquetFile(partition_s)
+        num_rows_r, num_rows_s = pf_r.metadata.num_rows, pf_s.metadata.num_rows
+        chunk_iterators_r[Path(partition_r).stem] = pf_r.iter_batches(batch_size=num_rows_r // n_buffers)
+        chunk_iterators_s[Path(partition_s).stem] = pf_s.iter_batches(batch_size=num_rows_s // n_buffers)
+    
+    chunks_r = {
+        name: next(chunk_iterator_r, False) for name, chunk_iterator_r in chunk_iterators_r.items()
+    }
+    chunks_s = {
+        name: next(chunk_iterator_s, False) for name, chunk_iterator_s in chunk_iterators_s.items()
+    }
+
+    row_iterator_r = {
+        name: iter([tuple(t.values()) for t in chunk.to_pylist()]) for name, chunk in chunks_r.items()
+    }
+    row_iterator_s = {
+        name: iter([tuple(t.values()) for t in chunk.to_pylist()]) for name, chunk in chunks_s.items()
+    }
+
+    rows_r = {name: next(row_iterator, None) for name, row_iterator in row_iterator_r.items()}
+    rows_s = {name: next(row_iterator, None) for name, row_iterator in row_iterator_s.items()}
+
+    r_tuples, s_tuples = [], []
+    #joined_data = []
+
+    while any(chunks_r.values()) and any(chunks_s.values()):
+        min_value = min(min([val for val in rows_r.values() if val], key=lambda x: x[join_idx_r])[join_idx_r], min([val for val in rows_s.values() if val], key=lambda x: x[join_idx_s])[join_idx_s])
+        for name in rows_r.keys():
+            while rows_r[name] is not None and rows_r[name] and rows_r[name][join_idx_r] == min_value: 
+                r_tuples.append(rows_r[name])
+                rows_r[name] = next(row_iterator_r[name], None)
+                if not rows_r[name]:
+                    chunks_r[name] = next(chunk_iterators_r[name], False)
+                    if chunks_r[name] != False:
+                        row_iterator_r[name] = iter([tuple(t.values()) for t in chunks_r[name].to_pylist()])
+                        rows_r[name] = next(row_iterator_r[name], False)
+                    else:
+                        rows_r[name]
+                        break
+        for name in rows_s.keys():
+            while rows_s[name] is not None and rows_s[name][join_idx_s] == min_value:
+                s_tuples.append(rows_s[name])
+                rows_s[name] = next(row_iterator_s[name], None)
+                if not rows_s[name]:
+                    chunks_s[name] = next(chunk_iterators_s[name], False)
+                    if chunks_s[name] != False:
+                        row_iterator_s[name] = iter([tuple(t.values()) for t in chunks_s[name].to_pylist()])
+                        rows_s[name] = next(row_iterator_s[name], False)
+                    else:
+                        rows_s[name] = None
+                        break
+        yield [(r + s) for r in r_tuples for s in s_tuples]
+        r_tuples, s_tuples = [], []
 
 # Update
 
