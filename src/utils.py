@@ -424,7 +424,6 @@ def sort_merge_join(r_path, s_path, join_col):
     rows_s = {name: next(row_iterator, None) for name, row_iterator in row_iterator_s.items()}
 
     r_tuples, s_tuples = [], []
-    #joined_data = []
 
     while any(chunks_r.values()) and any(chunks_s.values()):
         min_value = min(min([val for val in rows_r.values() if val], key=lambda x: x[join_idx_r])[join_idx_r], min([val for val in rows_s.values() if val], key=lambda x: x[join_idx_s])[join_idx_s])
