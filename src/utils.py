@@ -177,9 +177,9 @@ def execute_query(database: str, table_name: str, select: bool,
         # partial sort
         Path.mkdir(current_step_path / 'r')
         Path.mkdir(current_step_path / 's')
-        for partition, name in partial_sort(table_name, join_col):
+        for partition, name in partial_sort(prev_step_path=Path(DATA_PATH / database / table_name), sort_col=join_col):
             pq.write_table(table=partition, where=(current_step_path / 'r' / name).with_suffix('.parquet'))
-        for partition, name in partial_sort(join_table_name, join_col):
+        for partition, name in partial_sort(prev_step_path=Path(DATA_PATH / database / join_table_name), sort_col=join_col):
             pq.write_table(table=partition, where=(current_step_path / 's' / name).with_suffix('.parquet'))
 
         # merge join
@@ -194,20 +194,20 @@ def execute_query(database: str, table_name: str, select: bool,
         # convert txt file back to partitioned parquet files
         n_partitions = math.ceil(os.path.getsize(output_file_path) / MAX_PARTITION_SIZE)
         partition_counter = 0
-        schema_r = [name + '_x' if name == join_col else name for name in ds.dataset('step_1/r/').schema.names]
-        schema_s = [name + '_y' if name == join_col else name for name in ds.dataset('step_1/s/').schema.names]
+        schema_r = [name + '_x' if name == join_col else name for name in ds.dataset(current_step_path / 'r').schema.names]
+        schema_s = [name + '_y' if name == join_col else name for name in ds.dataset(current_step_path / 's').schema.names]
         schema = schema_r + schema_s
         with open(output_file_path, 'r') as file:
             lines = []
             for line in file:
                 lines.append(ast.literal_eval(line.rstrip()))
                 if len(lines) > line_count // n_partitions:
-                    name = f'data_{partition_counter}.parquet'
+                    name = f'{table_name}_{join_table_name}_{partition_counter}.parquet'
                     pl.DataFrame(lines, schema=schema).write_parquet(file=(current_step_path / name))
                     partition_counter += 1
                     lines = []
             if lines:
-                name = f'data_{partition_counter}.parquet'
+                name = f'{table_name}_{join_table_name}_{partition_counter}.parquet'
                 pl.DataFrame(lines, schema=schema).write_parquet(file=(current_step_path / name))
         # clean up directories
         shutil.rmtree(current_step_path / 'r')
