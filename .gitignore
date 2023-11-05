@@ -1,5 +1,6 @@
 data/*/*/*.parquet
 data/input/*.*
+data/temp/*
 testing/*/*.parquet
 testing/*/*/*.parquet
 
