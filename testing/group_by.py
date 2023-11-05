@@ -94,6 +94,7 @@ def group_by(prev_step_path, group_col, agg_col, agg_func):
             yield (current_agg_val, max(vals))
 
 
-for tup in group_by(base / 'step_2' / 'partial_sorted', 'states', 'purchases', 'average'):
-    print(tup)
+with open('output.txt', 'w') as file:
+    for data in group_by(base / 'step_2' / 'partial_sorted', 'states', 'purchases', 'average'):
+        file.write(str(data).rstrip() + '\n')
 # %%

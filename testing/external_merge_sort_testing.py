@@ -26,10 +26,10 @@ df4 = pl.DataFrame({
     'age': [random.randint(0, 100) for i in range(1000)]
 })
 
-df1.write_parquet('/Users/candicewu/USC_Fall_2023/DSCI551-Final_Project/testing/step_1/data_1.parquet')
-df2.write_parquet('/Users/candicewu/USC_Fall_2023/DSCI551-Final_Project/testing/step_1/data_2.parquet')
-df3.write_parquet('/Users/candicewu/USC_Fall_2023/DSCI551-Final_Project/testing/step_1/data_3.parquet')
-df4.write_parquet('/Users/candicewu/USC_Fall_2023/DSCI551-Final_Project/testing/step_1/data_4.parquet')
+df1.write_parquet('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/testing/step_1/data_1.parquet')
+df2.write_parquet('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/testing/step_1/data_2.parquet')
+df3.write_parquet('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/testing/step_1/data_3.parquet')
+df4.write_parquet('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/testing/step_1/data_4.parquet')
 
 #%%
 import pyarrow as pa
@@ -39,10 +39,10 @@ from pathlib import Path
 import pyarrow.dataset as ds
 
 # linux
-# base = Path('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/testing')
+base = Path('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/testing')
 
 # mac
-base = Path('/Users/candicewu/USC_Fall_2023/DSCI551-Final_Project/testing/')
+#base = Path('/Users/candicewu/USC_Fall_2023/DSCI551-Final_Project/testing/')
 
 dataset = ds.dataset(base / 'step_1', format='parquet')
 
@@ -63,7 +63,7 @@ def partial_sort(prev_step_path, sort_col):
         yield data, partition.stem
 
 for partition, name in partial_sort('./step_1/', 'age'):
-    pq.write_table(table=partition, where=(base / 'step_2' / name).with_suffix('.parquet'))
+    pq.write_table(table=partition, where=(base / 'step_2' / 'partial_sorted' / name).with_suffix('.parquet'))
 
 # %%
 
@@ -128,8 +128,8 @@ def merge_sorted_runs(prev_step_path, sort_col):
 
     yield pl.DataFrame(merged_data, schema=dataset.schema.names).to_arrow(), out_partition_names[out_partition_counter]
 
-for chunk, name in merge_sorted_runs(Path(base / 'step_2'), 'age'):
-    pq.write_table(table=partition, where=(base / 'step_3' / name).with_suffix('.parquet'))
+for chunk, name in merge_sorted_runs(Path(base / 'step_2' / 'partial_sorted'), 'age'):
+    pq.write_table(table=chunk, where=(base / 'step_2' / name).with_suffix('.parquet'))
 
 #%%
 # check

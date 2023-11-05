@@ -1,17 +1,19 @@
 import cmd
 import os
-import polars as pl
+from pathlib import Path
 
-from src.utils import *
+import utils
 
-data_dir = '/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/data/'
+data_dir = Path('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/data/')
 
 class DatabaseCLI(cmd.Cmd):
     prompt = '\U0001F911 > '
 
     def __init__(self):
         super().__init__()
-        self.dbs = os.listdir(data_dir)
+        if not (data_dir / 'temp').exists():
+            Path.mkdir(data_dir / 'temp')
+        self.dbs = [dir.stem for dir in list(data_dir.iterdir())]
         self.current_db = None
         self.tables = None
 
@@ -23,17 +25,18 @@ class DatabaseCLI(cmd.Cmd):
     def do_use_db(self, arg):
         '''Sets the path to the database to be queried. Loads tables names from database into memory.'''
         db_name = arg.strip()
-        db_path = os.path.join(data_dir, db_name)
+        db_path = data_dir / db_name
 
         if os.path.exists(db_path):
             self.current_db = db_path
-            self.tables = [os.path.splitext(fname)[0] for fname in os.listdir(db_path) if fname.endswith('parquet')]
+            self.tables = [dir.stem for dir in list(db_path.iterdir())]
             print(f'Using database: {db_name}')
         else:
             print(f'Database {db_name} not found')
 
     def do_show_existing_tables(self, arg):
         if self.current_db is not None:
+            print('Existing tables:\n')
             print(*self.tables, sep='\n')
         else:
             print(f'Database not set. Please set database to use to view existing tables.')
@@ -52,7 +55,7 @@ class DatabaseCLI(cmd.Cmd):
             return
         table_name = args[0].strip()
         schema_info = args[1:]
-        schema = [(schema_info[i], infer_datatypes(schema_info[i + 1])) for i in range(0, len(schema_info), 2)]
+        schema = [(schema_info[i], utils.infer_datatypes(schema_info[i + 1])) for i in range(0, len(schema_info), 2)]
         data = pl.DataFrame([], schema=schema)
         print(data)
 
@@ -61,8 +64,7 @@ class DatabaseCLI(cmd.Cmd):
         Reads in parquet table from disk and displays to console
         '''
         table_name = arg.split()[0]
-        data = pl.read_parquet(os.path.join(data_dir, self.current_db, table_name + '.parquet'))
-        print(data.head())
+        utils.read_full_table(database=self.current_db, table_name=table_name)
 
     def do_exit(self, arg):
         """Exit the CLI."""
