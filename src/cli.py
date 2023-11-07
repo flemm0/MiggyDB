@@ -1,6 +1,7 @@
 import cmd
 import os
 from pathlib import Path
+import polars as pl
 
 import utils
 
@@ -71,6 +72,9 @@ class DatabaseCLI(cmd.Cmd):
         print('Bye!', '\U0001F923')
         return True
 
-if __name__ == '__main__':
+def main():
     cli = DatabaseCLI()
-    cli.cmdloop('Welcome to Flemming\'s Database CLI. \U0001F60E Type "exit" to exit.')
+    cli.cmdloop('Welcome to MiggyDB. \U0001F60E Type "exit" to exit.')
+
+if __name__ == '__main__':
+    main()

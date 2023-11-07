@@ -16,7 +16,7 @@ import shutil
 import polars as pl
 import math
 
-from .config import *
+from config import *
 
 pl.Config.set_tbl_hide_dataframe_shape(True)
 
