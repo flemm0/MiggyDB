@@ -1,0 +1,2 @@
+[console_scripts]
+miggydb = src.cli:main
