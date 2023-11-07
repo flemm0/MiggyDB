@@ -1,6 +1,7 @@
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.dataset as ds
+import pyarrow.compute as pc
 from pyarrow import csv, json
 import os
 from subprocess import check_output
@@ -15,7 +16,7 @@ import shutil
 import polars as pl
 import math
 
-from .config import *
+from config import *
 
 pl.Config.set_tbl_hide_dataframe_shape(True)
 
@@ -177,9 +178,9 @@ def execute_query(database: str, table_name: str, select: bool,
         # partial sort
         Path.mkdir(current_step_path / 'r')
         Path.mkdir(current_step_path / 's')
-        for partition, name in partial_sort(table_name, join_col):
+        for partition, name in partial_sort(prev_step_path=Path(DATA_PATH / database / table_name), sort_col=join_col):
             pq.write_table(table=partition, where=(current_step_path / 'r' / name).with_suffix('.parquet'))
-        for partition, name in partial_sort(join_table_name, join_col):
+        for partition, name in partial_sort(prev_step_path=Path(DATA_PATH / database / join_table_name), sort_col=join_col):
             pq.write_table(table=partition, where=(current_step_path / 's' / name).with_suffix('.parquet'))
 
         # merge join
@@ -194,24 +195,35 @@ def execute_query(database: str, table_name: str, select: bool,
         # convert txt file back to partitioned parquet files
         n_partitions = math.ceil(os.path.getsize(output_file_path) / MAX_PARTITION_SIZE)
         partition_counter = 0
-        schema_r = [name + 'x' if name == join_col else name for name in ds.dataset('step_1/r/').schema.names]
-        schema_s = [name + 'y' if name == join_col else name for name in ds.dataset('step_1/s/').schema.names]
+        schema_r = [name + '_x' if name == join_col else name for name in ds.dataset(current_step_path / 'r').schema.names]
+        schema_s = [name + '_y' if name == join_col else name for name in ds.dataset(current_step_path / 's').schema.names]
         schema = schema_r + schema_s
         with open(output_file_path, 'r') as file:
             lines = []
             for line in file:
                 lines.append(ast.literal_eval(line.rstrip()))
                 if len(lines) > line_count // n_partitions:
-                    name = f'data_{partition_counter}.parquet'
+                    name = f'{table_name}_{join_table_name}_{partition_counter}.parquet'
                     pl.DataFrame(lines, schema=schema).write_parquet(file=(current_step_path / name))
                     partition_counter += 1
                     lines = []
             if lines:
-                name = f'data_{partition_counter}.parquet'
+                name = f'{table_name}_{join_table_name}_{partition_counter}.parquet'
                 pl.DataFrame(lines, schema=schema).write_parquet(file=(current_step_path / name))
         # clean up directories
         shutil.rmtree(current_step_path / 'r')
         shutil.rmtree(current_step_path / 's')
+        os.remove(output_file_path)
+
+    if len(filters):
+        prev_step_path = current_step_path
+        step += 1
+        step_dir = f'step_{step}'
+        current_step_path = Path(query_path / step_dir)
+        if not current_step_path.exists():
+            Path.mkdir(current_step_path)
+        for partition, name in filter_rows(prev_step_path=prev_step_path, filters=filters):
+            pq.write_table(table=partition, where=(current_step_path / name).with_suffix('.parquet'))
     
     if group:
         prev_step_path = current_step_path
@@ -221,15 +233,19 @@ def execute_query(database: str, table_name: str, select: bool,
         if not current_step_path.exists():
             Path.mkdir(current_step_path)
         # partial sort
-        Path.mkdir(current_step_path / 'partial_sorted')
-        for partition, name in partial_sort(prev_step_path, group_col):
-            pq.write_table(table=partition, where=(current_step_path / 'partial_sorted' / 'name').with_suffix('.parquet'))
+        partial_sort_path = Path(current_step_path / 'partial_sorted')
+        if not partial_sort_path.exists():
+            Path.mkdir(partial_sort_path)
+
+        for partition, name in partial_sort(prev_step_path=prev_step_path, sort_col=group_col):
+            pq.write_table(table=partition, where=(current_step_path / 'partial_sorted' / name).with_suffix('.parquet'))
 
         output_file_path = Path(current_step_path / 'output').with_suffix('.txt')
+        if not output_file_path.exists():
+            Path.touch(output_file_path)
         line_count = 0
-
         with open(output_file_path, 'w') as file:
-            for data in group_by(prev_step_path, group_col, agg_col, agg_func):
+            for data in group_by(prev_step_path=partial_sort_path, group_col=group_col, agg_col=agg_col, agg_func=agg_func):
                 file.write(str(data).rstrip() + '\n')
                 line_count += 1
         # convert txt file back to partitioned parquet files
@@ -241,23 +257,14 @@ def execute_query(database: str, table_name: str, select: bool,
             for line in file:
                 lines.append(ast.literal_eval(line.rstrip()))
                 if len(lines) > line_count // n_partitions:
-                    name = f'data_{partition_counter}.parquet'
+                    name = f'{table_name}_{partition_counter}.parquet'
                     pl.DataFrame(lines, schema=schema).write_parquet(file=(current_step_path / name))
             if lines:
-                name = f'data_{partition_counter}.parquet'
+                name = f'{table_name}_{partition_counter}.parquet'
                 pl.DataFrame(lines, schema=schema).write_parquet(file=(current_step_path / name))
         # clean up partial sorted data
         shutil.rmtree(current_step_path / 'partial_sorted')
-
-    if len(filters):
-        prev_step_path = current_step_path
-        step += 1
-        step_dir = f'step_{step}'
-        current_step_path = Path(query_path / step_dir)
-        if not current_step_path.exists():
-            Path.mkdir(current_step_path)
-        for partition, name in filter_rows(prev_step_path=prev_step_path, filters=filters):
-            pq.write_table(table=partition, where=(current_step_path / name).with_suffix('.parquet'))
+        os.remove(output_file_path)
 
     if len(columns):
         selected_cols = columns[0]
@@ -301,26 +308,6 @@ def execute_query(database: str, table_name: str, select: bool,
     data = pl.read_parquet(result_dataset.files[0])
     print(f'{n_rows} rows\t{n_cols} columns')
     return data
-
-# def print_results_to_console(database, table_name):
-#     '''
-#     TODO make changes so that it reads last "step" of query under temp database
-#     '''
-#     base = Path(os.path.join(DATA_PATH, database))
-#     dataset = ds.dataset(base / table_name, format='parquet')
-#     n_rows = dataset.count_rows()
-#     n_cols = dataset.head(1).num_columns
-    
-#     if len(dataset.files) == 1: # if only 1 partition, read it all in as it fits into the memory limits
-#         data = pl.DataFrame._from_arrow(pq.read_table(dataset.files[0]))
-#     else: # otherwise, read in first half of first partition, and last half of last partition
-#         head_pf = pq.ParquetFile(dataset.files[0])
-#         data = pl.DataFrame._from_arrow(head_pf.read_row_group(i=1)) # read first row group
-#         tail_pf = pq.ParquetFile(dataset.files[-1])
-#         data.extend(pl.DataFrame._from_arrow(tail_pf.read_row_group(i=tail_pf.metadata.num_row_groups - 1)))
-    
-#     print(f'{n_rows} rows\t{n_cols} columns')
-#     return data
 
 def read_table(database, table_name):
     '''Reads specified table to temporary database'''
@@ -408,26 +395,6 @@ def group_by(prev_step_path, group_col, agg_col, agg_func):
         elif agg_func == 'max':
             yield (current_agg_val, max(vals))
 
-# def hash_join(table1, index1, table2, index2):
-#     '''implement hash join that accepts table partitions
-    
-#     the hash phase should wrap a for loop above `for s in table1` for all the partitions and store the join values in the hash
-#     '''
-#     hash_table = defaultdict(list)
-#     result = []
-#     # hash phase
-#     for batch in table1.to_batches():
-#         rows = pl.DataFrame._from_arrow(batch).rows()
-#         for row in rows:
-#             hash_table[row[index1]].append(row)
-
-#     # join phase
-#     for batch in table2.to_batches():
-#         rows = pl.DataFrame._from_arrow(batch).rows()
-#         for row in rows:
-#             for entry in hash_table[row[index2]]:
-#                 result.append(entry + row)
-
 def partial_sort(prev_step_path, sort_col):
     '''Sorts each partition of a table sequentially and writes to disk'''
     dataset = ds.dataset(prev_step_path, format='parquet')
@@ -442,8 +409,6 @@ def partial_sort(prev_step_path, sort_col):
 
 def merge_sorted_runs(prev_step_path, sort_col):
     '''Merge phase of external merge sort'''
-    # testing
-    print(prev_step_path, type(prev_step_path))
     dataset = ds.dataset(prev_step_path, format='parquet')
     sort_idx = dataset.schema.names.index(sort_col)
     n_buffers = len(dataset.files) + 1 # add 1 for output buffer
@@ -564,15 +529,58 @@ def sort_merge_join(r_path, s_path, join_col):
 
 # Update
 
-def modify():
-    pass
+def modify(database, table_name, condition, update_val):
+    '''
+    condition = list of tuples e.g. ('acousticness', '<', 1)
+    update_val = data to update with
+    '''
+    def generate_filter(condition):
+        operator, comparison = condition[1], condition[2]
+        if operator == '<':
+            return lambda x: update_val if x < comparison else x
+        elif operator == '<=':
+            return lambda x: update_val if x <= comparison else x
+        elif operator == '=':
+            return lambda x: update_val if x == comparison else x
+        elif operator == '!=':
+            return lambda x: update_val if x != comparison else x
+        elif operator == '>=':
+            return lambda x: update_val if x >= comparison else x
+        elif operator == '>':
+            return lambda x: update_val if x > comparison else x
+        
+    for partition, name in read_table(database=database, table_name=table_name):
+        partition = pl.DataFrame._from_arrow(partition)
+        partition = partition.with_columns(pl.col(condition[0]).apply(generate_filter(condition=condition)))
+        partition.write_parquet(file=(DATA_PATH / database / table_name / name).with_suffix('.parquet'))
 
 
 # Delete
+def drop_rows(database, table_name, filters):
+    for partition, name in filter_rows(prev_step_path=(DATA_PATH / database / table_name), filters=filters):
+        pq.write_table(table=partition, where=(DATA_PATH / database / table_name / name).with_suffix('.parquet'))
+    negated_filters = []
+    for filter in filters:
+        if filter[1] == '<':
+            negated_filters.append((filter[0], '>=', filter[2]))
+        if filter[1] == '>':
+            negated_filters.append((filter[0], '<=', filter[2]))
+        if filter[1] == '<=':
+            negated_filters.append((filter[0], '>', filter[2]))
+        if filter[1] == '>=':
+            negated_filters.append((filter[0], '<', filter[2]))
+        if filter[1] == '=':
+            negated_filters.append((filter[0], '!=', filter[2]))
+        if filter[1] == '!=':
+            negated_filters.append((filter[0], '==', filter[2]))
+    for partition, name in filter_rows(prev_step_path=(DATA_PATH / database / table_name), filters=negated_filters):
+        if partition.num_rows != 0:
+            print('Error: row deletion failed')
+            return
+    print('Row deletion successfully completed!')
 
 def drop_table(database, table_name):
     '''Removes all partitions of a table from database directory'''
-    partitions = get_all_partitions(database=database, table_name=table_name)
-    for partition in partitions:
-        path = os.path.join(DATA_PATH, database, partition)
-        os.remove(path)
+    shutil.rmtree(DATA_PATH / database / table_name)
+    if not (DATA_PATH / database / table_name).exists():
+        print(f'{table_name} successfully removed')
