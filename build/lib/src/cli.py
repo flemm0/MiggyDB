@@ -126,7 +126,14 @@ class DatabaseCLI(Cmd):
         return group_col, agg_col, agg_func
     
     def parse_sort(self, query_dict):
-        return query_dict['sort'] if 'sort' in query_dict.keys() else None
+        if 'sort' not in query_dict.keys():
+            return None
+        else:
+            if ('rev' or 'reverse') in query_dict['sort']:
+                return query_dict['sort'].replace('reverse', '').replace('rev', '').strip(), True
+            else:
+                return query_dict['sort'], False
+        
     
     def parse_projection(self, query_dict):
         if 'gimme' not in query_dict.keys():
@@ -182,7 +189,7 @@ class DatabaseCLI(Cmd):
         table_name, join_table_name, join_col = self.parse_from_join(query_dict)
         filters = self.parse_filters(query_dict)
         group_col, agg_col, agg_func = self.parse_group_agg(query_dict)
-        sort_col = self.parse_sort(query_dict)
+        sort_col, reverse = self.parse_sort(query_dict)
         columns = self.parse_projection(query_dict)
         result = utils.execute_query(
             database=self.current_db,
@@ -194,7 +201,8 @@ class DatabaseCLI(Cmd):
             columns=columns,
             agg_col=agg_col,
             agg_func=agg_func,
-            sort_col=sort_col
+            sort_col=sort_col,
+            reverse=reverse
         )
         print(result)
 

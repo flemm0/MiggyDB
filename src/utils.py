@@ -162,7 +162,7 @@ def execute_query(database: str, table_name: str,
                   having: bool = None, # HAVING
                   columns: [list] = [], # SELECT (projection)
                   distinct: bool = None, 
-                  sort_col: str = None, # TODO add ASC/DESC option
+                  sort_col: str = None, reverse: bool = False,
                   limit: bool = None, offset: bool = None):
     '''Master query execution function'''
     step = 0
@@ -298,7 +298,7 @@ def execute_query(database: str, table_name: str,
         if not partial_sort_path.exists():
             Path.mkdir(partial_sort_path)
 
-        for partition, name in partial_sort(prev_step_path=prev_step_path, sort_col=sort_col):
+        for partition, name in partial_sort(prev_step_path=prev_step_path, sort_col=sort_col, reverse=reverse):
             pq.write_table(table=partition, where=(current_step_path / 'partial_sorted' / name).with_suffix('.parquet'))
         # merge phase
         for chunk, name in merge_sorted_runs(prev_step_path=partial_sort_path, sort_col=sort_col):
@@ -403,7 +403,7 @@ def group_by(prev_step_path, group_col, agg_col, agg_func):
         elif agg_func == 'max':
             yield (current_agg_val, max(vals))
 
-def partial_sort(prev_step_path, sort_col):
+def partial_sort(prev_step_path, sort_col, reverse: bool = False):
     '''Sorts each partition of a table sequentially and writes to disk'''
     dataset = ds.dataset(prev_step_path, format='parquet')
     sort_idx = dataset.schema.names.index(sort_col)
@@ -412,11 +412,11 @@ def partial_sort(prev_step_path, sort_col):
         partition = Path(partition)
         data = pl.read_parquet(partition).rows()
         data = [row for row in data if row[sort_idx] is not None] # ignore None values when sorting
-        data.sort(key=lambda x: (x[sort_idx] is None, x[sort_idx]))
+        data.sort(key=lambda x: (x[sort_idx] is None, x[sort_idx]), reverse=reverse)
         data = pl.DataFrame(data, schema=list(pl.read_parquet_schema(partition).keys())).to_arrow()
         yield data, partition.stem
 
-def merge_sorted_runs(prev_step_path, sort_col):
+def merge_sorted_runs(prev_step_path, sort_col, reverse: bool = False):
     '''Merge phase of external merge sort'''
     dataset = ds.dataset(prev_step_path, format='parquet')
     sort_idx = dataset.schema.names.index(sort_col)
@@ -448,27 +448,30 @@ def merge_sorted_runs(prev_step_path, sort_col):
     merged_data = [] # list to hold output buffer
     out_partition_counter = 0
     while any(chunks.values()):
-        min_tuple = min(rows.values(), key=lambda x: x[sort_idx])
-        min_chunk = list(filter(lambda x: rows[x] == min_tuple, rows))[0]
-        merged_data.append(min_tuple)
+        if reverse == False:
+            curr_tuple = min(rows.values(), key=lambda x: x[sort_idx])
+        else:
+            curr_tuple = max(rows.values(), key=lambda x: x[sort_idx])
+        curr_chunk = list(filter(lambda x: rows[x] == curr_tuple, rows))[0]
+        merged_data.append(curr_tuple)
         # write to disk if output buffer is full
         if len(merged_data) > out_buffer_len:
           yield pl.DataFrame(merged_data, schema=dataset.schema.names).to_arrow(), out_partition_names[out_partition_counter]
           out_partition_counter += 1
           merged_data = []
-        rows[min_chunk] = next(row_iterators[min_chunk], None)
-        if not rows[min_chunk]:
+        rows[curr_chunk] = next(row_iterators[curr_chunk], None)
+        if not rows[curr_chunk]:
             # update chunks dict, load next chunk
-            chunks[min_chunk] = next(chunk_iterators[min_chunk], False)
+            chunks[curr_chunk] = next(chunk_iterators[curr_chunk], False)
             # if still chunks to iterate, load next
-            if chunks[min_chunk] != False:
+            if chunks[curr_chunk] != False:
                 # update row_iterators dict - create new tuple iterator
-                row_iterators[min_chunk] = iter([tuple(t.values()) for t in chunks[min_chunk].to_pylist()])
+                row_iterators[curr_chunk] = iter([tuple(t.values()) for t in chunks[curr_chunk].to_pylist()])
                 # update rows_dict
-                rows[min_chunk] = next(row_iterators[min_chunk], False)
+                rows[curr_chunk] = next(row_iterators[curr_chunk], False)
             # if no more chunks, remove from dict
             else:
-                del rows[min_chunk]
+                del rows[curr_chunk]
 
     yield pl.DataFrame(merged_data, schema=dataset.schema.names).to_arrow(), out_partition_names[out_partition_counter]
 
