@@ -2,10 +2,11 @@ from cmd2 import Cmd
 import os
 from pathlib import Path
 import polars as pl
+import re
 
-import utils
-
-data_dir = Path('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/data/')
+from . import utils
+from .config import DATA_PATH
+#data_dir = Path('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/data/')
 '''
 TODO set default data dir
 
@@ -19,9 +20,9 @@ class DatabaseCLI(Cmd):
 
     def __init__(self):
         super().__init__()
-        if not (data_dir / 'temp').exists():
-            Path.mkdir(data_dir / 'temp')
-        self.dbs = [dir.stem for dir in list(data_dir.iterdir())]
+        if not (DATA_PATH / 'temp').exists():
+            Path.mkdir(DATA_PATH / 'temp')
+        self.dbs = [dir.stem for dir in list(DATA_PATH.iterdir())]
         self.current_db = None
         self.tables = None
 
@@ -29,8 +30,8 @@ class DatabaseCLI(Cmd):
         '''argument parser for creating a new database'''
         args = arg.split()
         if args[0] in ['db', 'database']:
-            Path.mkdir(data_dir / args[1])
-            if (data_dir / args[1]).exists():
+            Path.mkdir(DATA_PATH / args[1])
+            if (DATA_PATH / args[1]).exists():
                 print(f'Database {args[1]} successfully created')
         else:
             print('Unrecognized command')
@@ -56,7 +57,7 @@ class DatabaseCLI(Cmd):
         args = arg.split()
         if args[0] in ['db', 'database']:
             db_name = args[1]
-            db_path = data_dir / db_name
+            db_path = DATA_PATH / db_name
 
             if os.path.exists(db_path):
                 self.current_db = db_path
@@ -66,6 +67,48 @@ class DatabaseCLI(Cmd):
                 print(f'Database {db_name} not found')
         else:
             print('Unrecognized command')
+
+    def do_query(self, arg):
+        '''
+        Example:
+        gimme <col a>, <col b>, <col c>
+        from <table> <+ join table> e.g. employees + departments
+        filter <expr> e.g. age > 10
+        group <col>
+        agg <expr> count(age)
+        groupfilter <expr> e.g. count(age) > 10
+        sort <col>
+        trunc <int>
+        skip <int>
+        '''
+        keywords = [
+            'gimme',
+            'from',
+            'filter',
+            'group',
+            'agg',
+            'groupfilter',
+            'sort',
+            'trunc',
+            'skip'
+        ]
+        pattern = r'({})'.format('|'.join(map(re.escape, keywords)))
+        result = list(filter(None, re.split(pattern, arg)))
+        query_dict, key = {}, None
+        for item in result:
+            if item in keywords:
+                key = item
+                query_dict[key] = ''
+            else:
+                query_dict[key] += item.strip()
+        utils.execute_query(
+            database=self.current_db,
+            table_name=query_dict['from'] if '+' not in query_dict['from'] else query_dict['from'].split(' + ')[0],
+            select='+' in query_dict['from']
+        )
+
+
+
 
     def do_create_table(self, arg): ## TODO add option to import csv or json from path
         '''
