@@ -81,7 +81,6 @@ class DatabaseCLI(Cmd):
     def parse_filters(self, query_dict):
         if 'filter' not in query_dict.keys():
             return []
-        print(query_dict['filter']) # debug
         filter_str = query_dict['filter']
         filters = []
         for f in filter_str.split(' & '):
@@ -90,7 +89,6 @@ class DatabaseCLI(Cmd):
                 matches[1] = 'not in'
                 matches.remove('in')
             filters.append(matches)
-        print(filters) # debug
         for filter in filters:
             if filter[1] == 'gt':
                 filter[1] = '>'
@@ -116,6 +114,16 @@ class DatabaseCLI(Cmd):
                 else:
                     filter[2] = filter[2][1:-1]
         return [tuple(filter) for filter in filters]
+    
+    def parse_group_agg(self, query_dict):
+        group_col = query_dict['group'] if 'group' in query_dict.keys() else None
+        if 'agg' in query_dict.keys():
+            agg_vals = re.findall(r'([a-zA-Z]+)\((.*)\)', query_dict['agg'])[0]
+            agg_col = agg_vals[1]
+            agg_func = agg_vals[0]
+        else:
+            agg_col, agg_func = None, None
+        return group_col, agg_col, agg_func
             
     def do_query(self, arg):
         '''
@@ -155,13 +163,17 @@ class DatabaseCLI(Cmd):
                 query_dict[key] += item.strip()
         table_name, join_table_name, join_col = self.parse_from_join(query_dict)
         filters = self.parse_filters(query_dict)
-        print(filters)
+        group_col, agg_col, agg_func = self.parse_group_agg(query_dict)
+        print(group_col, agg_col, agg_func)
         result = utils.execute_query(
             database=self.current_db,
             table_name=table_name,
             join_table_name=join_table_name,
             join_col=join_col,
-            filters=filters
+            filters=filters,
+            group_col=group_col,
+            agg_col=agg_col,
+            agg_func=agg_func
         )
         print(result)
 

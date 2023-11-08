@@ -168,158 +168,154 @@ def execute_query(database: str, table_name: str,
     step = 0
     query_id = 'query_' + datetime.datetime.now().strftime("%y%m%d_%H%M%S") 
     query_path = Path(TEMP_DB_PATH / query_id)
-    try:
-        if not query_path.exists():
-            Path.mkdir(TEMP_DB_PATH / query_id)
+    if not query_path.exists():
+        Path.mkdir(TEMP_DB_PATH / query_id)
 
+    step_dir = f'step_{step}'
+    
+    current_step_path = Path(query_path / step_dir)
+    if not current_step_path.exists():
+        Path.mkdir(current_step_path)
+
+    if not join_table_name and not join_col: # both should be None if join is true
+        for partition, name in read_table(database=database, table_name=table_name):
+            pq.write_table(table=partition, where=(current_step_path / name).with_suffix('.parquet'))
+    else: # should execute if select is false
+        # partial sort
+        Path.mkdir(current_step_path / 'r')
+        Path.mkdir(current_step_path / 's')
+        for partition, name in partial_sort(prev_step_path=Path(DATA_PATH / database / table_name), sort_col=join_col):
+            pq.write_table(table=partition, where=(current_step_path / 'r' / name).with_suffix('.parquet'))
+        for partition, name in partial_sort(prev_step_path=Path(DATA_PATH / database / join_table_name), sort_col=join_col):
+            pq.write_table(table=partition, where=(current_step_path / 's' / name).with_suffix('.parquet'))
+
+        # merge join
+        output_file_path = current_step_path / 'output.txt'
+        line_count = 0
+        # write algorithm outputs to single txt file
+        with open(output_file_path, 'w') as file:
+            for data in sort_merge_join((current_step_path / 'r'), (current_step_path / 's'), join_col):
+                for tuple_data in data:
+                    file.write(str(tuple_data).rstrip() + "\n")
+                    line_count += 1
+        # convert txt file back to partitioned parquet files
+        n_partitions = math.ceil(os.path.getsize(output_file_path) / MAX_PARTITION_SIZE)
+        partition_counter = 0
+        schema_r = [name + '_x' if name == join_col else name for name in ds.dataset(current_step_path / 'r').schema.names]
+        schema_s = [name + '_y' if name == join_col else name for name in ds.dataset(current_step_path / 's').schema.names]
+        schema = schema_r + schema_s
+        with open(output_file_path, 'r') as file:
+            lines = []
+            for line in file:
+                lines.append(ast.literal_eval(line.rstrip()))
+                if len(lines) > line_count // n_partitions:
+                    name = f'{table_name}_{join_table_name}_{partition_counter}.parquet'
+                    pl.DataFrame(lines, schema=schema).write_parquet(file=(current_step_path / name))
+                    partition_counter += 1
+                    lines = []
+            if lines:
+                name = f'{table_name}_{join_table_name}_{partition_counter}.parquet'
+                pl.DataFrame(lines, schema=schema).write_parquet(file=(current_step_path / name))
+        # clean up directories
+        shutil.rmtree(current_step_path / 'r')
+        shutil.rmtree(current_step_path / 's')
+        os.remove(output_file_path)
+
+    if len(filters):
+        prev_step_path = current_step_path
+        step += 1
         step_dir = f'step_{step}'
-        
         current_step_path = Path(query_path / step_dir)
         if not current_step_path.exists():
             Path.mkdir(current_step_path)
+        for partition, name in filter_rows(prev_step_path=prev_step_path, filters=filters):
+            pq.write_table(table=partition, where=(current_step_path / name).with_suffix('.parquet'))
+    
+    if group_col and agg_col and agg_func:
+        prev_step_path = current_step_path
+        step += 1
+        step_dir = f'step_{step}'
+        current_step_path = Path(query_path / step_dir)
+        if not current_step_path.exists():
+            Path.mkdir(current_step_path)
+        # partial sort
+        partial_sort_path = Path(current_step_path / 'partial_sorted')
+        if not partial_sort_path.exists():
+            Path.mkdir(partial_sort_path)
 
-        if not join_table_name and not join_col: # both should be None if join is true
-            for partition, name in read_table(database=database, table_name=table_name):
-                pq.write_table(table=partition, where=(current_step_path / name).with_suffix('.parquet'))
-        else: # should execute if select is false
-            # partial sort
-            Path.mkdir(current_step_path / 'r')
-            Path.mkdir(current_step_path / 's')
-            for partition, name in partial_sort(prev_step_path=Path(DATA_PATH / database / table_name), sort_col=join_col):
-                pq.write_table(table=partition, where=(current_step_path / 'r' / name).with_suffix('.parquet'))
-            for partition, name in partial_sort(prev_step_path=Path(DATA_PATH / database / join_table_name), sort_col=join_col):
-                pq.write_table(table=partition, where=(current_step_path / 's' / name).with_suffix('.parquet'))
+        for partition, name in partial_sort(prev_step_path=prev_step_path, sort_col=group_col):
+            pq.write_table(table=partition, where=(current_step_path / 'partial_sorted' / name).with_suffix('.parquet'))
 
-            # merge join
-            output_file_path = current_step_path / 'output.txt'
-            line_count = 0
-            # write algorithm outputs to single txt file
-            with open(output_file_path, 'w') as file:
-                for data in sort_merge_join((current_step_path / 'r'), (current_step_path / 's'), join_col):
-                    for tuple_data in data:
-                        file.write(str(tuple_data).rstrip() + "\n")
-                        line_count += 1
-            # convert txt file back to partitioned parquet files
-            n_partitions = math.ceil(os.path.getsize(output_file_path) / MAX_PARTITION_SIZE)
-            partition_counter = 0
-            schema_r = [name + '_x' if name == join_col else name for name in ds.dataset(current_step_path / 'r').schema.names]
-            schema_s = [name + '_y' if name == join_col else name for name in ds.dataset(current_step_path / 's').schema.names]
-            schema = schema_r + schema_s
-            with open(output_file_path, 'r') as file:
-                lines = []
-                for line in file:
-                    lines.append(ast.literal_eval(line.rstrip()))
-                    if len(lines) > line_count // n_partitions:
-                        name = f'{table_name}_{join_table_name}_{partition_counter}.parquet'
-                        pl.DataFrame(lines, schema=schema).write_parquet(file=(current_step_path / name))
-                        partition_counter += 1
-                        lines = []
-                if lines:
-                    name = f'{table_name}_{join_table_name}_{partition_counter}.parquet'
-                    pl.DataFrame(lines, schema=schema).write_parquet(file=(current_step_path / name))
-            # clean up directories
-            shutil.rmtree(current_step_path / 'r')
-            shutil.rmtree(current_step_path / 's')
-            os.remove(output_file_path)
-
-        if len(filters):
-            prev_step_path = current_step_path
-            step += 1
-            step_dir = f'step_{step}'
-            current_step_path = Path(query_path / step_dir)
-            if not current_step_path.exists():
-                Path.mkdir(current_step_path)
-            for partition, name in filter_rows(prev_step_path=prev_step_path, filters=filters):
-                pq.write_table(table=partition, where=(current_step_path / name).with_suffix('.parquet'))
-        
-        if group_col and agg_col and agg_func:
-            prev_step_path = current_step_path
-            step += 1
-            step_dir = f'step_{step}'
-            current_step_path = Path(query_path / step_dir)
-            if not current_step_path.exists():
-                Path.mkdir(current_step_path)
-            # partial sort
-            partial_sort_path = Path(current_step_path / 'partial_sorted')
-            if not partial_sort_path.exists():
-                Path.mkdir(partial_sort_path)
-
-            for partition, name in partial_sort(prev_step_path=prev_step_path, sort_col=group_col):
-                pq.write_table(table=partition, where=(current_step_path / 'partial_sorted' / name).with_suffix('.parquet'))
-
-            output_file_path = Path(current_step_path / 'output').with_suffix('.txt')
-            if not output_file_path.exists():
-                Path.touch(output_file_path)
-            line_count = 0
-            with open(output_file_path, 'w') as file:
-                for data in group_by(prev_step_path=partial_sort_path, group_col=group_col, agg_col=agg_col, agg_func=agg_func):
-                    file.write(str(data).rstrip() + '\n')
-                    line_count += 1
-            # convert txt file back to partitioned parquet files
-            n_partitions = math.ceil(os.path.getsize(output_file_path) / MAX_PARTITION_SIZE)
-            partition_counter = 0
-            schema = [group_col, f'{agg_func}({agg_col})']
-            with open(output_file_path, 'r') as file:
-                lines = []
-                for line in file:
-                    lines.append(ast.literal_eval(line.rstrip()))
-                    if len(lines) > line_count // n_partitions:
-                        name = f'{table_name}_{partition_counter}.parquet'
-                        pl.DataFrame(lines, schema=schema).write_parquet(file=(current_step_path / name))
-                if lines:
+        output_file_path = Path(current_step_path / 'output').with_suffix('.txt')
+        if not output_file_path.exists():
+            Path.touch(output_file_path)
+        line_count = 0
+        with open(output_file_path, 'w') as file:
+            for data in group_by(prev_step_path=partial_sort_path, group_col=group_col, agg_col=agg_col, agg_func=agg_func):
+                file.write(str(data).rstrip() + '\n')
+                line_count += 1
+        # convert txt file back to partitioned parquet files
+        n_partitions = math.ceil(os.path.getsize(output_file_path) / MAX_PARTITION_SIZE)
+        partition_counter = 0
+        schema = [group_col, f'{agg_func}({agg_col})']
+        with open(output_file_path, 'r') as file:
+            lines = []
+            for line in file:
+                lines.append(ast.literal_eval(line.rstrip()))
+                if len(lines) > line_count // n_partitions:
                     name = f'{table_name}_{partition_counter}.parquet'
                     pl.DataFrame(lines, schema=schema).write_parquet(file=(current_step_path / name))
-            # clean up partial sorted data
-            shutil.rmtree(current_step_path / 'partial_sorted')
-            os.remove(output_file_path)
+            if lines:
+                name = f'{table_name}_{partition_counter}.parquet'
+                pl.DataFrame(lines, schema=schema).write_parquet(file=(current_step_path / name))
+        # clean up partial sorted data
+        shutil.rmtree(current_step_path / 'partial_sorted')
+        os.remove(output_file_path)
 
-        if len(columns):
-            selected_cols = columns[0]
-            new_col_names = columns[1] if len(columns[1]) else columns[0] # TODO set to selected_cols if no new names provided
+    if len(columns):
+        selected_cols = columns[0]
+        new_col_names = columns[1] if len(columns[1]) else columns[0] # TODO set to selected_cols if no new names provided
 
-            prev_step_path = current_step_path
-            step += 1
-            step_dir = f'step_{step}'
-            current_step_path = Path(query_path / step_dir)
-            if not current_step_path.exists():
-                Path.mkdir(current_step_path)
-            for partition, name in projection(prev_step_path, selected_cols, new_col_names):
-                pq.write_table(table=partition, where=(current_step_path / name).with_suffix('.parquet'))
+        prev_step_path = current_step_path
+        step += 1
+        step_dir = f'step_{step}'
+        current_step_path = Path(query_path / step_dir)
+        if not current_step_path.exists():
+            Path.mkdir(current_step_path)
+        for partition, name in projection(prev_step_path, selected_cols, new_col_names):
+            pq.write_table(table=partition, where=(current_step_path / name).with_suffix('.parquet'))
 
-        if sort_col:
-            prev_step_path = current_step_path
-            step += 1
-            step_dir = f'step_{step}'
-            current_step_path = Path(query_path / step_dir)
-            if not current_step_path.exists():
-                Path.mkdir(current_step_path)
-            # partial sort
+    if sort_col:
+        prev_step_path = current_step_path
+        step += 1
+        step_dir = f'step_{step}'
+        current_step_path = Path(query_path / step_dir)
+        if not current_step_path.exists():
+            Path.mkdir(current_step_path)
+        # partial sort
 
-            partial_sort_path = Path(current_step_path / 'partial_sorted')
-            if not partial_sort_path.exists():
-                Path.mkdir(partial_sort_path)
+        partial_sort_path = Path(current_step_path / 'partial_sorted')
+        if not partial_sort_path.exists():
+            Path.mkdir(partial_sort_path)
 
-            for partition, name in partial_sort(prev_step_path=prev_step_path, sort_col=sort_col):
-                pq.write_table(table=partition, where=(current_step_path / 'partial_sorted' / name).with_suffix('.parquet'))
-            # merge phase
-            for chunk, name in merge_sorted_runs(prev_step_path=partial_sort_path, sort_col=sort_col):
-                pq.write_table(table=chunk, where=(current_step_path / name).with_suffix('.parquet'))
-            shutil.rmtree(partial_sort_path)
+        for partition, name in partial_sort(prev_step_path=prev_step_path, sort_col=sort_col):
+            pq.write_table(table=partition, where=(current_step_path / 'partial_sorted' / name).with_suffix('.parquet'))
+        # merge phase
+        for chunk, name in merge_sorted_runs(prev_step_path=partial_sort_path, sort_col=sort_col):
+            pq.write_table(table=chunk, where=(current_step_path / name).with_suffix('.parquet'))
+        shutil.rmtree(partial_sort_path)
 
-        
-        # print data set
-        result_dataset = ds.dataset(current_step_path, format='parquet')
-        n_rows = result_dataset.count_rows()
-        n_cols = len(result_dataset.schema.names)
-        # read first partition
-        data = pl.read_parquet(result_dataset.files[0])
-        print(f'{n_rows} rows\t{n_cols} columns')
-        shutil.rmtree(query_path)
-        return data
-    except Exception as e:
-        print(f'An error occurred during query execution: {e}')
-    finally:
-        shutil.rmtree(query_path)
+    
+    # print data set
+    result_dataset = ds.dataset(current_step_path, format='parquet')
+    n_rows = result_dataset.count_rows()
+    n_cols = len(result_dataset.schema.names)
+    # read first partition
+    data = pl.read_parquet(result_dataset.files[0])
+    print(f'{n_rows} rows\t{n_cols} columns')
+    shutil.rmtree(query_path)
+    return data
+
 
 def read_table(database, table_name):
     '''Reads specified table to temporary database'''
@@ -415,7 +411,8 @@ def partial_sort(prev_step_path, sort_col):
     for partition in dataset.files:
         partition = Path(partition)
         data = pl.read_parquet(partition).rows()
-        data.sort(key=lambda x: x[sort_idx])
+        data = [row for row in data if row[sort_idx] is not None] # ignore None values when sorting
+        data.sort(key=lambda x: (x[sort_idx] is None, x[sort_idx]))
         data = pl.DataFrame(data, schema=list(pl.read_parquet_schema(partition).keys())).to_arrow()
         yield data, partition.stem
 

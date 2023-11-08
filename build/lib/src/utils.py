@@ -316,6 +316,7 @@ def execute_query(database: str, table_name: str,
     shutil.rmtree(query_path)
     return data
 
+
 def read_table(database, table_name):
     '''Reads specified table to temporary database'''
     dataset = ds.dataset(DATA_PATH / database / table_name, format='parquet')
@@ -410,7 +411,8 @@ def partial_sort(prev_step_path, sort_col):
     for partition in dataset.files:
         partition = Path(partition)
         data = pl.read_parquet(partition).rows()
-        data.sort(key=lambda x: x[sort_idx])
+        data = [row for row in data if row[sort_idx] is not None] # ignore None values when sorting
+        data.sort(key=lambda x: (x[sort_idx] is None, x[sort_idx]))
         data = pl.DataFrame(data, schema=list(pl.read_parquet_schema(partition).keys())).to_arrow()
         yield data, partition.stem
 
