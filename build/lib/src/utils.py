@@ -155,10 +155,16 @@ which will cause results to be printed and temporary directory to be cleared
 
 '''
 
-def execute_query(database: str, table_name: str, select: bool, 
-                  join: bool = None, join_col: str = None, join_table_name: str = None,
-                  filters: list = [], group: bool = None, group_col: str = None, agg_col: str = None, agg_func: str = None, having: bool = None, 
-                  columns: [list] = [], distinct: bool = None, order: bool = None, sort_col: str = None, limit: bool = None, offset: bool = None):
+def execute_query(database: str, table_name: str, 
+                  join_table_name: str = None, join_col: str = None, # FROM/JOIN
+                  filters: list = [],  # WHERE
+                  group_col: str = None, agg_col: str = None, agg_func: str = None, # GROUP BY
+                  having: bool = None, # HAVING
+                  columns: [list] = [], # SELECT (projection)
+                  distinct: bool = None, 
+                  sort_col: str = None, # TODO add ASC/DESC option
+                  limit: bool = None, offset: bool = None):
+    '''Master query execution function'''
     step = 0
     query_id = 'query_' + datetime.datetime.now().strftime("%y%m%d_%H%M%S") 
     query_path = Path(TEMP_DB_PATH / query_id)
@@ -171,10 +177,10 @@ def execute_query(database: str, table_name: str, select: bool,
     if not current_step_path.exists():
         Path.mkdir(current_step_path)
 
-    if select: # should be false if join is true
+    if not join_table_name and not join_col: # both should be None if join is true
         for partition, name in read_table(database=database, table_name=table_name):
             pq.write_table(table=partition, where=(current_step_path / name).with_suffix('.parquet'))
-    elif join: # should execute if select is false
+    else: # should execute if select is false
         # partial sort
         Path.mkdir(current_step_path / 'r')
         Path.mkdir(current_step_path / 's')
@@ -225,7 +231,7 @@ def execute_query(database: str, table_name: str, select: bool,
         for partition, name in filter_rows(prev_step_path=prev_step_path, filters=filters):
             pq.write_table(table=partition, where=(current_step_path / name).with_suffix('.parquet'))
     
-    if group:
+    if group_col and agg_col and agg_func:
         prev_step_path = current_step_path
         step += 1
         step_dir = f'step_{step}'
@@ -279,7 +285,7 @@ def execute_query(database: str, table_name: str, select: bool,
         for partition, name in projection(prev_step_path, selected_cols, new_col_names):
             pq.write_table(table=partition, where=(current_step_path / name).with_suffix('.parquet'))
 
-    if order:
+    if sort_col:
         prev_step_path = current_step_path
         step += 1
         step_dir = f'step_{step}'
@@ -307,6 +313,7 @@ def execute_query(database: str, table_name: str, select: bool,
     # read first partition
     data = pl.read_parquet(result_dataset.files[0])
     print(f'{n_rows} rows\t{n_cols} columns')
+    shutil.rmtree(query_path)
     return data
 
 def read_table(database, table_name):
@@ -337,7 +344,7 @@ def projection(prev_step_path, selected_cols, new_col_names):
     for partition in dataset.files:
         partition = Path(partition)
         data = pq.read_table(partition, columns=selected_cols) # list of column names
-        data.rename_columns(new_col_names)
+        data = data.rename_columns(new_col_names)
         yield data, partition.stem
 
 def group_by(prev_step_path, group_col, agg_col, agg_func):

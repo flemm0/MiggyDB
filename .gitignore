@@ -3,4 +3,4 @@ data/input/*.*
 data/temp/*
 testing/*/*.parquet
 testing/*/*/*.parquet
-
+notes.txt
