@@ -124,6 +124,24 @@ class DatabaseCLI(Cmd):
         else:
             agg_col, agg_func = None, None
         return group_col, agg_col, agg_func
+    
+    def parse_sort(self, query_dict):
+        return query_dict['sort'] if 'sort' in query_dict.keys() else None
+    
+    def parse_projection(self, query_dict):
+        if 'gimme' not in query_dict.keys():
+            return []
+        else:
+            selected_cols, new_col_names = [], []
+            for col in query_dict['gimme'].split(', '):
+                s = col.split(':')
+                if len(s) == 2:
+                    selected_cols.append(s[0])
+                    new_col_names.append(s[1])
+                else:
+                    selected_cols.append(s[0])
+                    new_col_names.append(s[0])
+            return [selected_cols, new_col_names]
             
     def do_query(self, arg):
         '''
@@ -164,7 +182,8 @@ class DatabaseCLI(Cmd):
         table_name, join_table_name, join_col = self.parse_from_join(query_dict)
         filters = self.parse_filters(query_dict)
         group_col, agg_col, agg_func = self.parse_group_agg(query_dict)
-        print(group_col, agg_col, agg_func)
+        sort_col = self.parse_sort(query_dict)
+        columns = self.parse_projection(query_dict)
         result = utils.execute_query(
             database=self.current_db,
             table_name=table_name,
@@ -172,8 +191,10 @@ class DatabaseCLI(Cmd):
             join_col=join_col,
             filters=filters,
             group_col=group_col,
+            columns=columns,
             agg_col=agg_col,
-            agg_func=agg_func
+            agg_func=agg_func,
+            sort_col=sort_col
         )
         print(result)
 
