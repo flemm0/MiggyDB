@@ -22,15 +22,11 @@ pl.Config.set_tbl_hide_dataframe_shape(True)
 
 # Utility functions
 
-def say_hi():
-    print("hello!")
-
-def get_all_partitions(database, table_name):
-    '''Returns list of all partitions of a table'''
-    files = os.listdir(os.path.join(DATA_PATH, database, table_name))
-    pattern = f'^{table_name}_\d+\.parquet$'
-    return [f for f in files if re.match(pattern, f)]
-
+# def get_all_partitions(database, table_name):
+#     '''Returns list of all partitions of a table'''
+#     files = os.listdir(os.path.join(DATA_PATH, database, table_name))
+#     pattern = f'^{table_name}_\d+\.parquet$'
+#     return [f for f in files if re.match(pattern, f)]
 
 # Create
 
@@ -97,7 +93,8 @@ def infer_datatypes(type):
         return pl.Null
 
 def create_table_from_cli(database, table_name, schema, primary_key=None, partition=0):
-    '''Create new table with schema defined in cli input
+    '''
+    Create new table with schema defined in cli input
     Schema should be a list of tuples
     '''
     table_path = os.path.join(DATA_PATH, database, table_name)
@@ -107,53 +104,41 @@ def create_table_from_cli(database, table_name, schema, primary_key=None, partit
     partition = '_' + str(partition)
     data.write_parquet(os.path.join(table_path, table_name + partition + '.parquet'))
 
-def check_latest_data_partition_size(database, table_name):
+def check_latest_data_partition_size(database, table_name) -> (bool, Path):
     '''Checks most recent parquet file partition size.'''
-    partitions = get_all_partitions(database=database, table_name=table_name)
-    latest_partition = sorted(partitions)[-1]    
-    latest_partition_path = os.path.join(DATA_PATH, database, latest_partition)
-    return os.path.getsize(latest_partition_path) <= MAX_PARTITION_SIZE, latest_partition_path
+    partitions = sorted(ds.dataset(DATA_PATH / database / table_name, format='parquet').files, key=lambda x: int(x.split('_')[-1].split('.')[0]))
+    latest_partition = pl.read_parquet(partitions[-1])
+    #partitions = get_all_partitions(database=database, table_name=table_name)
+    #latest_partition = sorted(partitions)[-1]    
+    #latest_partition_path = os.path.join(DATA_PATH, database, latest_partition)
+    return latest_partition.estimated_size() <= MAX_PARTITION_SIZE, partitions[-1]
 
 def insert_into(database, table_name, columns, values):
     '''
+    columns should be a list of column names: ['a', 'b', 'c']
+    and values should be a list of values or a list of lists. Tuples contain COLUMN values [[1, 1], [2, 2], ['x', 'y']]
+    should result in: {'a': [1, 1], 'b': [2, 2], 'c': ['x', 'y']}
+
     Checks most recent parquet file partition size. If it is less than 100 MB, append to the end of the file. Otherwise,
     create a new partition file (If this is the nth partition, the name is: data_n.parquet) and add to that.
     '''
     latest_partition_available, latest_partition_path = check_latest_data_partition_size(database=database, table_name=table_name)
     if latest_partition_available:
         data = pl.read_parquet(latest_partition_path)
-        new_data = pl.DataFrame({col: [val] for col, val in zip(columns, values)})
+        new_data = pl.DataFrame({col: val for col, val in zip(columns, values)})
         data.extend(new_data)
         data.write_parquet(latest_partition_path)
     else:
         schema = pl.read_parquet_schema(latest_partition_path)
-        data = pl.DataFrame({col: [val] for col, val in zip(columns, values)}, schema=schema)
-        data.write_parquet(latest_partition_path)
+        data = pl.DataFrame({col: val for col, val in zip(columns, values)}, schema=schema)
+        n = int(latest_partition_path.split('_')[-1].split('.')[0]) + 1
+        name = f'{table_name}_{n}.parquet'
+        data.write_parquet(DATA_PATH / database / table_name / name)
 
 
 
 
 # Read
-
-'''
-Query operations should be as follows:
-
-query order: FROM <table> JOIN <table> WHERE <cond> GROUP BY <cols> HAVING <cond> SELECT <cols> DISTINCT <> ORDER BY <cols> LIMIT/OFFSET <cols>
-custom syntax FROM <table> MERGE_WITH <table> COND <cond> GROUP <cols> GROUP_COND <cond> COLS <cols>  
-
-- when a query is made, a directory will be created under the data/temp/ directory with a query id
-- for each step of the query, a directory will be created under query id directory where the partitions for query results of each step are stored
-- the first directory will store results from the FROM/JOIN query
-- the next step will read in results from the directory of the previous step
-
-- queries begin with the FROM or JOIN clauses, so these functions will take a database and table_name as input
-- the FROM clause will select the dataset needed and write table in batches to temporary directory
-- if this is the end of the query, read in head and tail of dataset in temp directory, print to console, and clear directory
-- if this is not the end of the query, return the dataset object pointing to the dataset created in the temp directory
-- subsequent steps of the query will operate and overwrite the tables in the temporary directory, until the end of query is reached,
-which will cause results to be printed and temporary directory to be cleared
-
-'''
 
 def execute_query(database: str, table_name: str, 
                   join_table_name: str = None, join_col: str = None, # FROM/JOIN

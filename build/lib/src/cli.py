@@ -35,6 +35,24 @@ class DatabaseCLI(Cmd):
             Path.mkdir(DATA_PATH / args[1])
             if (DATA_PATH / args[1]).exists():
                 print(f'Database {args[1]} successfully created')
+        elif args[0] == 'table':
+            if len(args) < 3:
+                print('Invalid input. Please provide a table name, and at least one column name followed by its data type')
+                return
+            if self.current_db is None:
+                print(f'Database not set. Please specify a database for the new table.')
+            elif args[1] in self.tables:
+                print(f'Table {args[2]} already exists.')
+            else:
+                try:
+                    schema = args[2:]
+                    schema = list(zip(schema[::2], schema[1::2]))
+                    schema = [(x[0], utils.infer_datatypes(x[1])) for x in schema]
+                    utils.create_table_from_cli(database=self.current_db, table_name=args[1], schema=schema)
+                    self.tables.append(args[1])
+                    print(f'Table {args[1]} successfully created')
+                except Exception as e:
+                    print('An error occurred: {e}')
         else:
             print('Unrecognized command')
 
