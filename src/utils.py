@@ -113,16 +113,18 @@ def check_latest_data_partition_size(database, table_name) -> (bool, Path):
     #latest_partition_path = os.path.join(DATA_PATH, database, latest_partition)
     return latest_partition.estimated_size() <= MAX_PARTITION_SIZE, partitions[-1]
 
-def insert_into(database, table_name, columns, values):
+def insert_into(database, table_name, values, columns=None):
     '''
     columns should be a list of column names: ['a', 'b', 'c']
-    and values should be a list of values or a list of lists. Tuples contain COLUMN values [[1, 1], [2, 2], ['x', 'y']]
+    and values should be a list of values or a list of iterables. Iterables contain COLUMN values [[1, 1], [2, 2], ['x', 'y']]
     should result in: {'a': [1, 1], 'b': [2, 2], 'c': ['x', 'y']}
 
     Checks most recent parquet file partition size. If it is less than 100 MB, append to the end of the file. Otherwise,
     create a new partition file (If this is the nth partition, the name is: data_n.parquet) and add to that.
     '''
     latest_partition_available, latest_partition_path = check_latest_data_partition_size(database=database, table_name=table_name)
+    if not columns:
+        columns = list(pl.read_parquet_schema(latest_partition_path).keys())
     if latest_partition_available:
         data = pl.read_parquet(latest_partition_path)
         new_data = pl.DataFrame({col: val for col, val in zip(columns, values)})
