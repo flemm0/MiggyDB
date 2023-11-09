@@ -578,8 +578,8 @@ def drop_rows(database, table_name, filters):
             return
     print('Row deletion successfully completed!')
 
-def drop_table(database, table_name):
-    '''Removes all partitions of a table from database directory'''
-    shutil.rmtree(DATA_PATH / database / table_name)
-    if not (DATA_PATH / database / table_name).exists():
-        print(f'{table_name} successfully removed')
+# def drop_table(database, table_name):
+#     '''Removes all partitions of a table from database directory'''
+#     shutil.rmtree(DATA_PATH / database / table_name)
+#     if not (DATA_PATH / database / table_name).exists():
+#         print(f'{table_name} successfully removed')
