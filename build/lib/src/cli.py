@@ -4,6 +4,7 @@ from pathlib import Path
 import polars as pl
 import re
 import ast
+import shutil
 
 from . import utils
 from .config import DATA_PATH
@@ -127,7 +128,7 @@ class DatabaseCLI(Cmd):
     
     def parse_sort(self, query_dict):
         if 'sort' not in query_dict.keys():
-            return None
+            return None, False
         else:
             if ('rev' or 'reverse') in query_dict['sort']:
                 return query_dict['sort'].replace('reverse', '').replace('rev', '').strip(), True
@@ -191,6 +192,29 @@ class DatabaseCLI(Cmd):
         group_col, agg_col, agg_func = self.parse_group_agg(query_dict)
         sort_col, reverse = self.parse_sort(query_dict)
         columns = self.parse_projection(query_dict)
+
+        # checks
+        if table_name not in self.tables:
+            print(f'Error: {table_name} not found')
+            return
+        if join_table_name is not None and join_table_name not in self.tables:
+            print(f'Error: {join_table_name} not found')
+            return
+
+        valid_agg_funcs = ['sum', 'min', 'max', 'count', 'average']
+        if agg_func is not None and agg_func not in valid_agg_funcs:
+            print(f'Error: {agg_func} is not a valid aggregate function. Valid aggregate functions are: {valid_agg_funcs}')
+            return
+        
+        if group_col and agg_col and agg_func:
+            for col in columns[0]:
+                if col not in [group_col, f'{agg_func}({agg_col})']:
+                    print('Error: columns in projection must either be the grouping column or the aggregated column')
+                    return
+            if sort_col is not None and sort_col not in columns[1]:
+                print('Error: if sort column is given an alias, must pass the alias to the sort clause')
+                return
+
         result = utils.execute_query(
             database=self.current_db,
             table_name=table_name,
@@ -235,8 +259,19 @@ class DatabaseCLI(Cmd):
 
     def do_exit(self, arg):
         """Exit the CLI."""
-        print('Bye!', '\U0001F923')
-        return True
+        temp_dir = DATA_PATH / 'temp'
+        try:
+            # Clear the contents of the directory
+            for filename in temp_dir.glob('*'):
+                if filename.is_file():
+                    filename.unlink()
+                else:
+                    shutil.rmtree(filename)
+        except Exception as e:
+            print(f'Error: {e}')
+        finally:
+            print('Bye!', '\U0001F923')
+            return True
 
 def main():
     cli = DatabaseCLI()
