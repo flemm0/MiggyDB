@@ -152,7 +152,47 @@ class DatabaseCLI(Cmd):
         else:
             print('Unrecognized command')
 
-
+    def do_amend(self, arg):
+        '''
+        argument parser to modify values in a table
+        supports only 1 condition for now
+        '''
+        keywords = ['amend', 'filter', 'set', 'to']
+        pattern = r'({})'.format('|'.join(map(re.escape, keywords)))
+        result = ['amend'] + [s.strip() for s in re.split(pattern, arg) if s]
+        query_dict, key = {}, None
+        for item in result:
+            if item in keywords:
+                key = item
+                query_dict[key] = ''
+            else:
+                query_dict[key] += item.strip()
+        # parse filters       
+        filters = query_dict['filter']
+        filters = re.findall(r"[A-Za-z_]+|'[^']*'|\d+(?:\.\d+)?|\[[^\]]+\]", filters)
+        filter_tuples = []
+        # parse update value
+        update_val = query_dict['to']
+        if update_val.replace('.', '').isnumeric():
+            if "'" not in update_val:
+                update_val = ast.literal_eval(update_val)
+        else:
+            update_val = str(update_val)
+        for i in range(0, len(filters), 4):
+            filter_tuples.append((filters[i], filters[i+1], filters[i+2]))
+            if i + 3 < len(filters):
+                filter_tuples.append(filters[i+3])
+        print(update_val, type(update_val))
+        try:
+            utils.modify(
+                database=self.current_db,
+                table_name=query_dict['amend'],
+                filters=filter_tuples,
+                update_col=query_dict['set'],
+                update_val=query_dict['to']
+            )
+        except Exception as e:
+            print(f'An exception occurred: {e}')
 
     def parse_from_join(self, query_dict):
         table_name = query_dict['from'] if '+' not in query_dict['from'] else query_dict['from'].split(' + ')[0]
