@@ -131,6 +131,7 @@ class DatabaseCLI(Cmd):
         if args[0] in ['db', 'database']:
             try:
                 shutil.rmtree(DATA_PATH / args[1])
+                self.dbs.remove(args[1])
                 if not (DATA_PATH / args[1]).exists():
                     print(f'Database {args[1]} successfully removed')
                 if args[1] == self.current_db:
@@ -179,10 +180,9 @@ class DatabaseCLI(Cmd):
         else:
             update_val = str(update_val)
         for i in range(0, len(filters), 4):
-            filter_tuples.append((filters[i], filters[i+1], filters[i+2]))
+            filter_tuples.append((filters[i], filters[i+1], ast.literal_eval(filters[i+2])))
             if i + 3 < len(filters):
                 filter_tuples.append(filters[i+3])
-        print(update_val, type(update_val))
         try:
             utils.modify(
                 database=self.current_db,
@@ -191,6 +191,7 @@ class DatabaseCLI(Cmd):
                 update_col=query_dict['set'],
                 update_val=query_dict['to']
             )
+            print(f'{query_dict["amend"]} successfully updated')
         except Exception as e:
             print(f'An exception occurred: {e}')
 

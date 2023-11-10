@@ -528,63 +528,15 @@ def sort_merge_join(r_path, s_path, join_col):
 
 # Update
 
-def modify(database, table_name, condition, update_col, update_val):
-    '''
-    condition = list of tuples e.g. ('acousticness', '<', 1)
-    update_val = data to update with
-    '''
-    def generate_new_column(table, condition):
-        comparison_col, operator, comparison_val = condition[0], condition[1], condition[2]
-        if operator == '<':
-            return pa.array([
-                update_val if c.as_py() < comparison_val else u.as_py() for c, u in zip(table.column(comparison_col), table.column(update_col))
-            ])
-        elif operator == '<=':
-            return pa.array([
-                update_val if c.as_py() <= comparison_val else u.as_py() for c, u in zip(table.column(comparison_col), table.column(update_col))
-            ])
-        elif operator == '=':
-            return pa.array([
-                update_val if c.as_py() == comparison_val else u.as_py() for c, u in zip(table.column(comparison_col), table.column(update_col))
-            ])
-        elif operator == '!=':
-            return pa.array([
-                update_val if c.as_py() != comparison_val else u.as_py() for c, u in zip(table.column(comparison_col), table.column(update_col))
-            ])
-        elif operator == '>=':
-            return pa.array([
-                update_val if c.as_py() >= comparison_val else u.as_py() for c, u in zip(table.column(comparison_col), table.column(update_col))
-            ])
-        elif operator == '>':
-            return pa.array([
-                update_val if c.as_py() > comparison_val else u.as_py() for c, u in zip(table.column(comparison_col), table.column(update_col))
-            ])
-        elif operator == 'in':
-            return pa.array([
-                update_val if c.as_py() in comparison_val else u.as_py() for c, u in zip(table.column(comparison_col), table.column(update_col))
-            ])
-        else:
-            return pa.array([
-                update_val if c.as_py() not in comparison_val else u.as_py() for c, u in zip(table.column(comparison_col), table.column(update_col))
-            ])
-        
-    for partition, name in read_table(database=database, table_name=table_name):
-        partition = partition.set_column(partition.schema.names.index(update_col), update_col, generate_new_column(table=partition, condition=condition))
-        pq.write_table(table=partition, where=(DATA_PATH / database / table_name / name).with_suffix('.parquet'))
-
 def modify(database, table_name, filters, update_col, update_val):
     '''
-    condition = list of tuples e.g. ('acousticness', '<', 1)
+    filters = list of tuples e.g. ('acousticness', 'gt', 1)
     update_val = data to update with
-
-    df.with_columns(
-        pl.when(mask).then(10000).otherwise(pl.col("age")).alias("age")
-    )
     '''
 
     for partition, name in read_table(database=database, table_name=table_name):
+        target_schema = partition.schema
         partition = pl.DataFrame._from_arrow(partition)
-        schema = partition.schema
         operator_mapping = {
             'gt': lambda x, y: x > y,
             'lt': lambda x, y: x < y,
@@ -595,7 +547,7 @@ def modify(database, table_name, filters, update_col, update_val):
             'in': lambda x, y: x in y,
             'not in': lambda x, y: x not in y
         }
-        # filters = [('age', '>', 30), '&', ('name', '=', 'Alice'), '|', ('age', '<', 50)]
+        # filters = [('age', 'gt', 30), 'and', ('name', 'eq', 'Alice'), 'or', ('age', 'lt', 50)]
 
         mask = operator_mapping[filters[0][1]](partition[filters[0][0]], filters[0][2])
         for i in range(1, len(filters), 2):
@@ -604,17 +556,15 @@ def modify(database, table_name, filters, update_col, update_val):
             else:
                 mask = mask | (operator_mapping[filters[i+1][1]](partition[filters[i+1][0]], filters[i+1][2]))
         
-        print(mask)
-
         partition = partition.with_columns(
             pl.when(mask).then(update_val).otherwise(pl.col(update_col)).alias(update_col)
         )
         if isinstance(update_val, str):
-            partition = partition.with_columns(update_col, partition[update_col].apply(lambda x: x.strip("'")))
+            partition = partition.with_columns(partition[update_col].apply(lambda x: x.strip('"').strip("'")))
 
-        partition = partition.cast(schema)
-        print(partition)
-        #pq.write_table(table=partition, where=(DATA_PATH / database / table_name / name).with_suffix('.parquet'))
+        partition = partition.to_arrow()
+        partition = partition.cast(target_schema=target_schema)
+        pq.write_table(table=partition, where=(DATA_PATH / database / table_name / name).with_suffix('.parquet'))
         
 # Delete
 def drop_rows(database, table_name, filters):
