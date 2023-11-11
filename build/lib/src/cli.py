@@ -8,13 +8,6 @@ import shutil
 
 from . import utils
 from .config import DATA_PATH
-#data_dir = Path('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/data/')
-'''
-TODO set default data dir
-
-/var/lib/miggydb for linux
-/usr/local/var/miggydb for mac
-'''
 
 
 class DatabaseCLI(Cmd):
@@ -35,6 +28,7 @@ class DatabaseCLI(Cmd):
         args = arg.split()
         if args[0] in ['db', 'database']:
             Path.mkdir(DATA_PATH / args[1])
+            self.dbs.append(args[1])
             if (DATA_PATH / args[1]).exists():
                 print(f'Database {args[1]} successfully created')
         elif args[0] == 'table':
@@ -50,6 +44,10 @@ class DatabaseCLI(Cmd):
                             database=self.current_db,
                             table_name=args[-1] if len(args) == 5 else None
                         )
+                        if len(args) == 5:
+                            self.tables.append(args[-1])
+                        else:
+                            self.tables.append(Path(args[3]).stem)
                     except Exception as e:
                         print(f'An error occurred: {e}')
                 else:
