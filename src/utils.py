@@ -22,12 +22,6 @@ pl.Config.set_tbl_hide_dataframe_shape(True)
 
 # Utility functions
 
-# def get_all_partitions(database, table_name):
-#     '''Returns list of all partitions of a table'''
-#     files = os.listdir(os.path.join(DATA_PATH, database, table_name))
-#     pattern = f'^{table_name}_\d+\.parquet$'
-#     return [f for f in files if re.match(pattern, f)]
-
 # Create
 
 def wc(path):
@@ -108,9 +102,6 @@ def check_latest_data_partition_size(database, table_name) -> (bool, Path):
     '''Checks most recent parquet file partition size.'''
     partitions = sorted(ds.dataset(DATA_PATH / database / table_name, format='parquet').files, key=lambda x: int(x.split('_')[-1].split('.')[0]))
     latest_partition = pl.read_parquet(partitions[-1])
-    #partitions = get_all_partitions(database=database, table_name=table_name)
-    #latest_partition = sorted(partitions)[-1]    
-    #latest_partition_path = os.path.join(DATA_PATH, database, latest_partition)
     return latest_partition.estimated_size() <= MAX_PARTITION_SIZE, partitions[-1]
 
 def insert_into(database, table_name, values, columns=None):
@@ -136,8 +127,6 @@ def insert_into(database, table_name, values, columns=None):
         n = int(latest_partition_path.split('_')[-1].split('.')[0]) + 1
         name = f'{table_name}_{n}.parquet'
         data.write_parquet(DATA_PATH / database / table_name / name)
-
-
 
 
 # Read

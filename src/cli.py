@@ -8,13 +8,6 @@ import shutil
 
 from . import utils
 from .config import DATA_PATH
-#data_dir = Path('/home/flemm0/school_stuff/USC_Fall_2023/DSCI551-Final_Project/data/')
-'''
-TODO set default data dir
-
-/var/lib/miggydb for linux
-/usr/local/var/miggydb for mac
-'''
 
 
 class DatabaseCLI(Cmd):
@@ -22,6 +15,8 @@ class DatabaseCLI(Cmd):
 
     def __init__(self):
         super().__init__()
+        if not DATA_PATH.exists():
+            Path.mkdir(DATA_PATH)
         if not (DATA_PATH / 'temp').exists():
             Path.mkdir(DATA_PATH / 'temp')
         self.dbs = [dir.stem for dir in list(DATA_PATH.iterdir())]

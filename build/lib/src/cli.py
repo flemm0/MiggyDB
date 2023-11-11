@@ -22,6 +22,8 @@ class DatabaseCLI(Cmd):
 
     def __init__(self):
         super().__init__()
+        if not DATA_PATH.exists():
+            Path.mkdir(DATA_PATH)
         if not (DATA_PATH / 'temp').exists():
             Path.mkdir(DATA_PATH / 'temp')
         self.dbs = [dir.stem for dir in list(DATA_PATH.iterdir())]
