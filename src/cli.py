@@ -208,38 +208,21 @@ class DatabaseCLI(Cmd):
         if 'filter' not in query_dict.keys():
             return []
         filter_str = query_dict['filter']
-        filters = []
-        for f in filter_str.split(' & '):
-            matches = re.findall(r"[A-Za-z_]+|'[^']*'|\d+(?:\.\d+)?|\[[^\]]+\]", f)
-            if matches[1] == 'not':
-                matches[1] = 'not in'
-                matches.remove('in')
-            filters.append(matches)
-        for filter in filters:
-            if filter[1] == 'gt':
-                filter[1] = '>'
-            elif filter[1] == 'gte':
-                filter[1] = '>='
-            elif filter[1] == 'lt':
-                filter[1] = '<'
-            elif filter[1] == 'lte':
-                filter[1] = '<='
-            elif filter[1] == 'eq':
-                filter[1] = '='
-            elif filter[1] == 'ne':
-                filter[1] = '!='
-            elif filter[1] == 'in' or filter[1] == 'not in':
-                filter[2] = ast.literal_eval(filter[2])
-        for filter in filters:
-            if not isinstance(filter[2], list):
-                if filter[2].replace('.', '').isnumeric():
-                    if "'" in filter[-1]:
-                        filter[2] = filter[2][1:-1]
-                    else:
-                        filter[2] = ast.literal_eval(filter[-1])
-                else:
-                    filter[2] = filter[2][1:-1]
-        return [tuple(filter) for filter in filters]
+        # replace all comparison operators with ', <op>',
+        filter_str = filter_str.replace(' gte', "', '>=',")\
+            .replace(' eq', "', '=',")\
+            .replace(' in', "', 'in',")\
+            .replace(' nin', "', 'not in',")\
+            .replace(' lte', "', '<=',")\
+            .replace(' lt', "', '<',")\
+            .replace(' gt', "', '>',")\
+            .replace(' ne', "', '!=',")
+        # replace all instance of '(' followed by letter to "'" separated
+        filter_str = re.sub(r'\((\w)', r"('\1", filter_str)
+        if isinstance(ast.literal_eval(filter_str)[0], str):
+            return [ast.literal_eval(filter_str)]
+        else:
+            return list(ast.literal_eval(filter_str))
     
     def parse_group_agg(self, query_dict):
         group_col = query_dict['group'] if 'group' in query_dict.keys() else None
