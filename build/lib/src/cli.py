@@ -213,10 +213,7 @@ class DatabaseCLI(Cmd):
                 query_dict[key] = ''
             else:
                 query_dict[key] += item.strip()
-        # parse filters       
-        filters = query_dict['filter']
-        filters = re.findall(r"[A-Za-z_]+|'[^']*'|\d+(?:\.\d+)?|\[[^\]]+\]", filters)
-        filter_tuples = []
+
         # parse update value
         update_val = query_dict['to']
         if update_val.replace('.', '').isnumeric():
@@ -224,17 +221,31 @@ class DatabaseCLI(Cmd):
                 update_val = ast.literal_eval(update_val)
         else:
             update_val = str(update_val)
-        for i in range(0, len(filters), 4):
-            filter_tuples.append((filters[i], filters[i+1], ast.literal_eval(filters[i+2])))
-            if i + 3 < len(filters):
-                filter_tuples.append(filters[i+3])
+
+        # parse filters       
+        filter_str = query_dict['filter']
+        filter_str = filter_str.replace(' gte', "', '>=',")\
+            .replace(' eq', "', '=',")\
+            .replace(' in', "', 'in',")\
+            .replace(' nin', "', 'not in',")\
+            .replace(' lte', "', '<=',")\
+            .replace(' lt', "', '<',")\
+            .replace(' gt', "', '>',")\
+            .replace(' ne', "', '!=',")
+        # replace all instance of '(' followed by letter to "'" separated
+        filter_str = re.sub(r'\((\w)', r"('\1", filter_str)
+        if isinstance(ast.literal_eval(filter_str)[0], str):
+            filters = [ast.literal_eval(filter_str)]
+        else:
+            filters = list(ast.literal_eval(filter_str))
+
         try:
             utils.modify(
                 database=self.current_db,
                 table_name=query_dict['amend'],
-                filters=filter_tuples,
+                filters=filters,
                 update_col=query_dict['set'],
-                update_val=query_dict['to']
+                update_val=update_val
             )
             print(f'{query_dict["amend"]} successfully updated')
         except Exception as e:

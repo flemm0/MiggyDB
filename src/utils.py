@@ -530,32 +530,31 @@ def sort_merge_join(r_path, s_path, join_col):
 
 def modify(database, table_name, filters, update_col, update_val):
     '''
-    filters = list of tuples e.g. ('acousticness', 'gt', 1)
+    filters = list of tuples e.g. ('acousticness', '>', 1)
     update_val = data to update with
+    currently supports 'and' condition
+    if you would like to update an or condition, just call the function for each condiition
     '''
 
     for partition, name in read_table(database=database, table_name=table_name):
         target_schema = partition.schema
         partition = pl.DataFrame._from_arrow(partition)
         operator_mapping = {
-            'gt': lambda x, y: x > y,
-            'lt': lambda x, y: x < y,
-            'ge': lambda x, y: x >= y,
-            'le': lambda x, y: x <= y,
-            'eq': lambda x, y: x == y,
-            'ne': lambda x, y: x != y,
+            '>': lambda x, y: x > y,
+            '<': lambda x, y: x < y,
+            '>=': lambda x, y: x >= y,
+            '<=': lambda x, y: x <= y,
+            '=': lambda x, y: x == y,
+            '!=': lambda x, y: x != y,
             'in': lambda x, y: x in y,
             'not in': lambda x, y: x not in y
         }
-        # filters = [('age', 'gt', 30), 'and', ('name', 'eq', 'Alice'), 'or', ('age', 'lt', 50)]
-
+        # example filter: [('age', '>', 30), ('name', '=', 'Alice'), ('age', '<=', 50)]
+        # iterate through list of filter tuples and generate boolean mask
         mask = operator_mapping[filters[0][1]](partition[filters[0][0]], filters[0][2])
-        for i in range(1, len(filters), 2):
-            if filters[i] == 'and':
-                mask = mask & (operator_mapping[filters[i+1][1]](partition[filters[i+1][0]], filters[i+1][2]))
-            else:
-                mask = mask | (operator_mapping[filters[i+1][1]](partition[filters[i+1][0]], filters[i+1][2]))
-        
+        for i in range(1, len(filters)):
+            mask = mask & (operator_mapping[filters[i][1]](partition[filters[i][0]], filters[i][2]))
+
         partition = partition.with_columns(
             pl.when(mask).then(update_val).otherwise(pl.col(update_col)).alias(update_col)
         )
@@ -570,22 +569,3 @@ def modify(database, table_name, filters, update_col, update_val):
 def drop_rows(database, table_name, filters):
     for partition, name in filter_rows(prev_step_path=(DATA_PATH / database / table_name), filters=filters):
         pq.write_table(table=partition, where=(DATA_PATH / database / table_name / name).with_suffix('.parquet'))
-    # negated_filters = []
-    # for filter in filters:
-    #     if filter[1] == '<':
-    #         negated_filters.append((filter[0], '>=', filter[2]))
-    #     if filter[1] == '>':
-    #         negated_filters.append((filter[0], '<=', filter[2]))
-    #     if filter[1] == '<=':
-    #         negated_filters.append((filter[0], '>', filter[2]))
-    #     if filter[1] == '>=':
-    #         negated_filters.append((filter[0], '<', filter[2]))
-    #     if filter[1] == '=':
-    #         negated_filters.append((filter[0], '!=', filter[2]))
-    #     if filter[1] == '!=':
-    #         negated_filters.append((filter[0], '==', filter[2]))
-    # for partition, name in filter_rows(prev_step_path=(DATA_PATH / database / table_name), filters=negated_filters):
-    #     if partition.num_rows != 0:
-    #         print('Error: row deletion failed')
-    #         return
-    # print('Row deletion successfully completed!')
