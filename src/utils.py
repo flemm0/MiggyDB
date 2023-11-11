@@ -570,28 +570,22 @@ def modify(database, table_name, filters, update_col, update_val):
 def drop_rows(database, table_name, filters):
     for partition, name in filter_rows(prev_step_path=(DATA_PATH / database / table_name), filters=filters):
         pq.write_table(table=partition, where=(DATA_PATH / database / table_name / name).with_suffix('.parquet'))
-    negated_filters = []
-    for filter in filters:
-        if filter[1] == '<':
-            negated_filters.append((filter[0], '>=', filter[2]))
-        if filter[1] == '>':
-            negated_filters.append((filter[0], '<=', filter[2]))
-        if filter[1] == '<=':
-            negated_filters.append((filter[0], '>', filter[2]))
-        if filter[1] == '>=':
-            negated_filters.append((filter[0], '<', filter[2]))
-        if filter[1] == '=':
-            negated_filters.append((filter[0], '!=', filter[2]))
-        if filter[1] == '!=':
-            negated_filters.append((filter[0], '==', filter[2]))
-    for partition, name in filter_rows(prev_step_path=(DATA_PATH / database / table_name), filters=negated_filters):
-        if partition.num_rows != 0:
-            print('Error: row deletion failed')
-            return
-    print('Row deletion successfully completed!')
-
-# def drop_table(database, table_name):
-#     '''Removes all partitions of a table from database directory'''
-#     shutil.rmtree(DATA_PATH / database / table_name)
-#     if not (DATA_PATH / database / table_name).exists():
-#         print(f'{table_name} successfully removed')
+    # negated_filters = []
+    # for filter in filters:
+    #     if filter[1] == '<':
+    #         negated_filters.append((filter[0], '>=', filter[2]))
+    #     if filter[1] == '>':
+    #         negated_filters.append((filter[0], '<=', filter[2]))
+    #     if filter[1] == '<=':
+    #         negated_filters.append((filter[0], '>', filter[2]))
+    #     if filter[1] == '>=':
+    #         negated_filters.append((filter[0], '<', filter[2]))
+    #     if filter[1] == '=':
+    #         negated_filters.append((filter[0], '!=', filter[2]))
+    #     if filter[1] == '!=':
+    #         negated_filters.append((filter[0], '==', filter[2]))
+    # for partition, name in filter_rows(prev_step_path=(DATA_PATH / database / table_name), filters=negated_filters):
+    #     if partition.num_rows != 0:
+    #         print('Error: row deletion failed')
+    #         return
+    # print('Row deletion successfully completed!')

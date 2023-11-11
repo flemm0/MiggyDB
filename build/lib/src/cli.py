@@ -153,6 +153,51 @@ class DatabaseCLI(Cmd):
         else:
             print('Unrecognized command')
 
+    def do_remove(self, arg):
+        '''
+        argument parser to remove rows from table given filter condition
+        remove rows from <table> filter (<co>, <op>, <val>)
+        '''
+        if self.current_db is None:
+            print('Database not set. Please set a database before inserting into table')
+            return
+        keywords = ['remove', 'from', 'filter']
+        pattern = r'({})'.format('|'.join(map(re.escape, keywords)))
+        result = ['remove'] + [s.strip() for s in re.split(pattern, arg) if s]
+        query_dict, key = {}, None
+        for item in result:
+            if item in keywords:
+                key = item
+                query_dict[key] = ''
+            else:
+                query_dict[key] += item.strip()
+        filter_str = query_dict['filter']
+        # replace and negate comparison operators with ', <op>',
+        filter_str = filter_str.replace(' gte', "', '<',")\
+            .replace(' eq', "', '!=',")\
+            .replace(' in', "', 'not in',")\
+            .replace(' nin', "', 'in',")\
+            .replace(' lte', "', '>',")\
+            .replace(' lt', "', '>=',")\
+            .replace(' gt', "', '<=',")\
+            .replace(' ne', "', '=',")
+        # replace all instance of '(' followed by letter to "'" separated
+        filter_str = re.sub(r'\((\w)', r"('\1", filter_str)
+        if isinstance(ast.literal_eval(filter_str)[0], str):
+            filters = [ast.literal_eval(filter_str)]
+        else:
+            filters = list(ast.literal_eval(filter_str))
+        try:
+            utils.drop_rows(
+                database=self.current_db,
+                table_name=query_dict['from'],
+                filters=filters
+            )
+            print('Rows successfully removed')
+        except Exception as e:
+            print(f'An exception ocurred: {e}')
+
+
     def do_amend(self, arg):
         '''
         argument parser to modify values in a table
