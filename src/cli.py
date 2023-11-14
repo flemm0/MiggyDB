@@ -8,6 +8,7 @@ import re
 import ast
 import shutil
 import datetime
+import time
 
 from . import utils
 from .config import DATA_PATH, TEMP_DB_PATH
@@ -331,14 +332,15 @@ class DatabaseCLI(Cmd):
         Example:
         gimme <col a>, <col b>, <col c>
         from <table> <+ join table by col a> e.g. employees + departments by id
-        filter <expr> e.g. age > 10 & name = 'john'
+        filter <expr> e.g. (age gt 10), (name eq 'john')
         group <col>
         agg <expr> count(age)
-        groupfilter <expr> e.g. count(age) > 10
+        grpfilt <expr> e.g. (count(age) > 10)
         sort <col>
         trunc <int>
         skip <int>
         '''
+        start_time = time.time()
         if self.current_db is None:
             print('No database selected. Please use the "use" command to select a database')
             return
@@ -433,6 +435,9 @@ class DatabaseCLI(Cmd):
                 print(pl.concat([data_head, data_tail]))
         finally:
             shutil.rmtree(query_path, ignore_errors=True)
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            print(f'Elapsed time: {elapsed_time:.4f} seconds')
 
     def do_copy(self, arg):
         """Usage: copy (query ...) to 'output.csv'"""

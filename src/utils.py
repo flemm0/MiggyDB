@@ -22,10 +22,15 @@ pl.Config.set_tbl_hide_dataframe_shape(True)
 
 # Utility functions
 
-# Create
+def dataset_sort_key(path):
+    '''sorting key for pyarrow.dataset data files'''
+    return int(Path(path).stem.split('_')[-1])
 
 def wc(path):
+    '''word count utility for JSON ingesting'''
     return int(check_output(['wc', '-l', path]).split()[0])
+
+# Create
 
 def create_table_from_csv(path, database, table_name=None):
     '''Create a new table in the database system from input csv file. Processes it in 100 MB chunks'''
@@ -298,7 +303,7 @@ def execute_query(database: str, table_name: str, query_path: Path, query_id: st
 def read_table(database, table_name):
     '''Reads specified table to temporary database'''
     dataset = ds.dataset(DATA_PATH / database / table_name, format='parquet')
-    for partition in dataset.files:
+    for partition in sorted(dataset.files, key=dataset_sort_key):
         partition = Path(partition)
         data = pq.read_table(partition)
         yield data, partition.stem
@@ -309,7 +314,7 @@ def filter_rows(prev_step_path, filters):
     Yields filtered data partitions and partition name
     '''
     dataset = ds.dataset(prev_step_path, format='parquet')
-    for partition in dataset.files:
+    for partition in sorted(dataset.files, key=dataset_sort_key):
         partition = Path(partition)
         data = pq.read_table(partition, filters=filters) # list of tuples e.g. ('acousticness', '<', 1)
         yield data, partition.stem
@@ -320,7 +325,7 @@ def projection(prev_step_path, selected_cols, new_col_names):
     Yields filtered data partitions and partition name
     '''
     dataset = ds.dataset(prev_step_path, format='parquet')
-    for partition in dataset.files:
+    for partition in sorted(dataset.files, key=dataset_sort_key):
         partition = Path(partition)
         data = pq.read_table(partition, columns=selected_cols) # list of column names
         data = data.rename_columns(new_col_names)
@@ -386,7 +391,7 @@ def partial_sort(prev_step_path, sort_col, reverse: bool = False):
     dataset = ds.dataset(prev_step_path, format='parquet')
     sort_idx = dataset.schema.names.index(sort_col)
 
-    for partition in dataset.files:
+    for partition in sorted(dataset.files, key=dataset_sort_key):
         partition = Path(partition)
         data = pl.read_parquet(partition).rows()
         data = [row for row in data if row[sort_idx] is not None] # ignore None values when sorting
