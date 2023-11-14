@@ -3,3 +3,4 @@ data/input/*.*
 data/temp/*
 testing/*
 notes.txt
+*.code-workspace
