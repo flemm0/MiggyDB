@@ -19,6 +19,8 @@ import math
 from .config import *
 
 pl.Config.set_tbl_hide_dataframe_shape(True)
+pl.option('display.max_rows', 20)
+pl.option('display.max_columns', 10)
 
 # Utility functions
 

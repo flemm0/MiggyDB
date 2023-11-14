@@ -457,7 +457,7 @@ class DatabaseCLI(Cmd):
             'filter',
             'group',
             'agg',
-            'groupfilter',
+            'grpfilt',
             'sort',
             'trunc',
             'skip'
