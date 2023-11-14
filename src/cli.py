@@ -2,12 +2,15 @@ from cmd2 import Cmd
 import os
 from pathlib import Path
 import polars as pl
+import pyarrow.parquet as pq
+import pyarrow.csv as csv
 import re
 import ast
 import shutil
+import datetime
 
 from . import utils
-from .config import DATA_PATH
+from .config import DATA_PATH, TEMP_DB_PATH
 
 
 class DatabaseCLI(Cmd):
@@ -378,21 +381,113 @@ class DatabaseCLI(Cmd):
             if sort_col is not None and sort_col not in columns[1]:
                 print('Error: if sort column is given an alias, must pass the alias to the sort clause')
                 return
+        
+        try:
+            query_id = 'query_' + datetime.datetime.now().strftime("%y%m%d_%H%M%S") 
+            query_path = Path(TEMP_DB_PATH / query_id)
 
-        result = utils.execute_query(
-            database=self.current_db,
-            table_name=table_name,
-            join_table_name=join_table_name,
-            join_col=join_col,
-            filters=filters,
-            group_col=group_col,
-            columns=columns,
-            agg_col=agg_col,
-            agg_func=agg_func,
-            sort_col=sort_col,
-            reverse=reverse
-        )
-        print(result)
+            result_dataset = utils.execute_query(
+                database=self.current_db,
+                table_name=table_name,
+                query_path=query_path,
+                query_id=query_id,
+                join_table_name=join_table_name,
+                join_col=join_col,
+                filters=filters,
+                group_col=group_col,
+                columns=columns,
+                agg_col=agg_col,
+                agg_func=agg_func,
+                sort_col=sort_col,
+                reverse=reverse
+            )
+            n_rows = result_dataset.count_rows()
+            n_cols = len(result_dataset.schema.names)
+
+            print(f'{n_rows} rows\t{n_cols} columns')
+            # if dataset is only 1 file, read first partition
+            if len(result_dataset.files) == 1:
+                print(pl.read_parquet(result_dataset.files[0]))
+            else:
+                tail_nrows = pq.ParquetFile(result_dataset.files[-1]).metadata.num_rows
+                data_tail = pl.read_parquet(result_dataset.files[-1]).tail(-tail_nrows//2)
+
+                head_nrows = pq.ParquetFile(result_dataset.files[0]).metadata.num_rows
+                data_head = pl.read_parquet(result_dataset.files[0], n_rows=head_nrows)
+
+                print(pl.concat([data_head, data_tail]))
+        finally:
+            shutil.rmtree(query_path, ignore_errors=True)
+
+    def do_copy(self, arg):
+        """Usage: copy (query ...) to 'output.csv'"""
+        if self.current_db is None:
+            print('No database selected. Please use the "use" command to select a database')
+            return
+
+        query_pattern = re.compile(r'\((.*)\)')
+        query_str = query_pattern.search(arg).group(1).strip()
+        query_str = query_str.replace('query ', '')
+        output_pattern = re.compile(r"to '([^']+\.csv)'")
+        output_path = Path(output_pattern.search(arg).group(1))
+
+        keywords = [
+            'gimme',
+            'from',
+            'filter',
+            'group',
+            'agg',
+            'groupfilter',
+            'sort',
+            'trunc',
+            'skip'
+        ]
+        pattern = r'({})'.format('|'.join(map(re.escape, keywords)))
+        result = list(filter(None, re.split(pattern, query_str)))
+        query_dict, key = {}, None
+        for item in result:
+            if item in keywords:
+                key = item
+                query_dict[key] = ''
+            else:
+                query_dict[key] += item.strip()
+        table_name, join_table_name, join_col = self.parse_from_join(query_dict)
+        filters = self.parse_filters(query_dict)
+        group_col, agg_col, agg_func = self.parse_group_agg(query_dict)
+        sort_col, reverse = self.parse_sort(query_dict)
+        columns = self.parse_projection(query_dict)
+        try:
+            query_id = 'query_' + datetime.datetime.now().strftime("%y%m%d_%H%M%S") 
+            query_path = Path(TEMP_DB_PATH / query_id)
+
+            result_dataset = utils.execute_query(
+                database=self.current_db,
+                table_name=table_name,
+                query_path=query_path,
+                query_id=query_id,
+                join_table_name=join_table_name,
+                join_col=join_col,
+                filters=filters,
+                group_col=group_col,
+                columns=columns,
+                agg_col=agg_col,
+                agg_func=agg_func,
+                sort_col=sort_col,
+                reverse=reverse
+            )
+            if not output_path.exists():
+                output_path.touch()
+            else:
+                print(f'File {output_path} already exists.')
+                return
+            with csv.CSVWriter(output_path, result_dataset.schema) as writer:
+                for file in result_dataset.files:
+                        table = pq.read_table(file)
+                        writer.write_table(table)
+        finally:
+            shutil.rmtree(query_path, ignore_errors=True)
+
+
 
     def do_exit(self, arg):
         """Exit the CLI."""
