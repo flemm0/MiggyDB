@@ -263,10 +263,15 @@ class DatabaseCLI(Cmd):
             join_col = None
         return table_name, join_table_name, join_col
     
-    def parse_filters(self, query_dict):
-        if 'filter' not in query_dict.keys():
-            return []
-        filter_str = query_dict['filter']
+    def parse_filters(self, query_dict, group=False):
+        if not group:
+            if 'filter' not in query_dict.keys():
+                return []
+            filter_str = query_dict['filter']
+        else:
+            if 'grpfilt' not in query_dict.keys():
+                return []
+            filter_str = query_dict['grpfilt']
         # replace all comparison operators with ', <op>',
         filter_str = filter_str.replace(' gte', "', '>=',")\
             .replace(' eq', "', '=',")\
@@ -277,7 +282,10 @@ class DatabaseCLI(Cmd):
             .replace(' gt', "', '>',")\
             .replace(' ne', "', '!=',")
         # replace all instance of '(' followed by letter to "'" separated
-        filter_str = re.sub(r'\((\w)', r"('\1", filter_str)
+        if not group:
+            filter_str = re.sub(r'\((\w)', r"('\1", filter_str)
+        else:
+            filter_str = filter_str.replace("(", "('", 1)
         if isinstance(ast.literal_eval(filter_str)[0], str):
             return [ast.literal_eval(filter_str)]
         else:
@@ -340,7 +348,7 @@ class DatabaseCLI(Cmd):
             'filter',
             'group',
             'agg',
-            'groupfilter',
+            'grpfilt',
             'sort',
             'trunc',
             'skip'
@@ -357,6 +365,7 @@ class DatabaseCLI(Cmd):
         table_name, join_table_name, join_col = self.parse_from_join(query_dict)
         filters = self.parse_filters(query_dict)
         group_col, agg_col, agg_func = self.parse_group_agg(query_dict)
+        group_filter = self.parse_filters(query_dict, group=True)
         sort_col, reverse = self.parse_sort(query_dict)
         columns = self.parse_projection(query_dict)
 
@@ -374,10 +383,15 @@ class DatabaseCLI(Cmd):
             return
         
         if group_col and agg_col and agg_func:
-            for col in columns[0]:
-                if col not in [group_col, f'{agg_func}({agg_col})']:
-                    print('Error: columns in projection must either be the grouping column or the aggregated column')
+            if len(group_filter):
+                if group_filter[0][0] not in [group_col, f'{agg_func}({agg_col})']:
+                    print('Group filter must be applied to grouping column or aggregate column.')
                     return
+            if len(columns):
+                for col in columns[0]:
+                    if col not in [group_col, f'{agg_func}({agg_col})']:
+                        print('Error: columns in projection must either be the grouping column or the aggregated column')
+                        return
             if sort_col is not None and sort_col not in columns[1]:
                 print('Error: if sort column is given an alias, must pass the alias to the sort clause')
                 return
@@ -398,6 +412,7 @@ class DatabaseCLI(Cmd):
                 columns=columns,
                 agg_col=agg_col,
                 agg_func=agg_func,
+                group_filter=group_filter,
                 sort_col=sort_col,
                 reverse=reverse
             )

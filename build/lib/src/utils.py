@@ -135,7 +135,7 @@ def execute_query(database: str, table_name: str, query_path: Path, query_id: st
                   join_table_name: str = None, join_col: str = None, # FROM/JOIN
                   filters: list = [],  # WHERE
                   group_col: str = None, agg_col: str = None, agg_func: str = None, # GROUP BY
-                  having: bool = None, # HAVING
+                  group_filter: list = [], # HAVING
                   columns: [list] = [], # SELECT (projection)
                   distinct: bool = None, 
                   sort_col: str = None, reverse: bool = False,
@@ -246,6 +246,16 @@ def execute_query(database: str, table_name: str, query_path: Path, query_id: st
         # clean up partial sorted data
         shutil.rmtree(current_step_path / 'partial_sorted')
         os.remove(output_file_path)
+
+    if len(group_filter):
+        prev_step_path = current_step_path
+        step += 1
+        step_dir = f'step_{step}'
+        current_step_path = Path(query_path / step_dir)
+        if not current_step_path.exists():
+            Path.mkdir(current_step_path)
+        for partition, name in filter_rows(prev_step_path=prev_step_path, filters=group_filter):
+            pq.write_table(table=partition, where=(current_step_path / name).with_suffix('.parquet'))
 
     if len(columns):
         selected_cols = columns[0]
