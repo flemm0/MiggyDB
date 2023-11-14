@@ -5,7 +5,7 @@ with open("requirements.txt", encoding="utf-8") as f:
 
 setup(
     name='miggydb',
-    version='0.1',
+    version='0.2',
     description='Custom Database System',
     author='Flemming Wu',
     author_email='wuflemmi@usc.edu',

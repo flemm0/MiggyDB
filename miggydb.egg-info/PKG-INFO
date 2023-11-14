@@ -1,7 +1,11 @@
 Metadata-Version: 2.1
 Name: miggydb
-Version: 0.1
+Version: 0.2
 Summary: Custom Database System
 Author: Flemming Wu
 Author-email: wuflemmi@usc.edu
 Requires-Python: >=3.10
+Requires-Dist: pyarrow==13.0.0
+Requires-Dist: pip==23.2.1
+Requires-Dist: polars==0.19.3
+Requires-Dist: cmd2==2.4.3

@@ -371,6 +371,9 @@ class DatabaseCLI(Cmd):
         sort_col, reverse = self.parse_sort(query_dict)
         columns = self.parse_projection(query_dict)
 
+        offset = ast.literal_eval(query_dict['skip']) if 'skip' in query_dict.keys() else None
+        limit = ast.literal_eval(query_dict['trunc']) if 'trunc' in query_dict.keys() else None
+
         # checks
         if table_name not in self.tables:
             print(f'Error: {table_name} not found')
@@ -421,18 +424,57 @@ class DatabaseCLI(Cmd):
             n_rows = result_dataset.count_rows()
             n_cols = len(result_dataset.schema.names)
 
-            print(f'{n_rows} rows\t{n_cols} columns')
-            # if dataset is only 1 file, read first partition
-            if len(result_dataset.files) == 1:
-                print(pl.read_parquet(result_dataset.files[0]))
+            if offset is None and limit is None:
+                print(f'{n_rows} rows\t{n_cols} columns')
+                # if dataset is only 1 file, read first partition
+                if len(result_dataset.files) == 1:
+                    print(pl.read_parquet(result_dataset.files[0]))
+                else:
+                    tail_nrows = pq.ParquetFile(result_dataset.files[-1]).metadata.num_rows
+                    data_tail = pl.read_parquet(result_dataset.files[-1]).tail(-tail_nrows//2)
+
+                    head_nrows = pq.ParquetFile(result_dataset.files[0]).metadata.num_rows
+                    data_head = pl.read_parquet(result_dataset.files[0], n_rows=head_nrows)
+
+                    print(pl.concat([data_head, data_tail]))
             else:
-                tail_nrows = pq.ParquetFile(result_dataset.files[-1]).metadata.num_rows
-                data_tail = pl.read_parquet(result_dataset.files[-1]).tail(-tail_nrows//2)
+                if offset is None:
+                    offset = 0
+                if limit is None:
+                    limit = result_dataset.count_rows()
+                files_dict = {}
+                cumulative_sum = 0
+                for i, file in enumerate(result_dataset.files):
+                    previous_sum = files_dict.get(result_dataset.files[i-1], (0, 0))[1] + 1 if i > 0 else 0
+                    cumulative_sum += pq.ParquetFile(file).metadata.num_rows
+                    files_dict[file] = (previous_sum, cumulative_sum)
 
-                head_nrows = pq.ParquetFile(result_dataset.files[0]).metadata.num_rows
-                data_head = pl.read_parquet(result_dataset.files[0], n_rows=head_nrows)
+                filtered_files = list(files_dict.keys())
+                for file in files_dict.keys():
+                    if offset and files_dict[file][1] <= offset:
+                        filtered_files.remove(file)
+                    if limit and files_dict[file][0] >= offset + limit and file in filtered_files:
+                        filtered_files.remove(file)
 
-                print(pl.concat([data_head, data_tail]))
+                files_dict = {key: val for key, val in files_dict.items() if key in filtered_files}
+
+                print(f'{offset + limit} rows\t{n_cols} columns')
+                if len(files_dict) == 1:
+                    path = sorted(files_dict.keys(), key=lambda x: int(Path(x).stem.split('_')[-1]))[0]
+                    data = pl.read_parquet(path).tail(-(offset - files_dict[path][1])).head(limit)
+                    print(data)
+                else:
+                    head_path = sorted(files_dict.keys(), key=lambda x: int(Path(x).stem.split('_')[-1]))[0]
+                    tail_path = sorted(files_dict.keys(), key=lambda x: int(Path(x).stem.split('_')[-1]))[-1]
+
+                    # first read in from tail: the first (offset + length) - files_dict[tail_path][0] number of rows
+                    # then take the difference between head_nrows and n_rows read from tail_nrows and read in head
+                    tail_nrows = (offset + limit) - files_dict[tail_path][0]
+                    head_nrows = pq.ParquetFile(head_path).metadata.num_rows - tail_nrows
+
+                    data = pl.read_parquet(head_path, n_rows=head_nrows)
+                    data = data.extend(pl.read_parquet(tail_path, n_rows=tail_nrows))
+                    print(data)
         finally:
             shutil.rmtree(query_path, ignore_errors=True)
             end_time = time.time()
