@@ -1,6 +1,4 @@
-data/*/*/*.parquet
-data/input/*.*
-data/temp/*
+data/*
 testing/*
-notes.txt
+notes/*
 *.code-workspace
