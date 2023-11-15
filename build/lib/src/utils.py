@@ -2,14 +2,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.dataset as ds
 import pyarrow.compute as pc
-from pyarrow import csv, json
+import csv
+import json
 import os
 from subprocess import check_output
-import re
 import subprocess
 from pathlib import Path
-from collections import defaultdict
-import datetime
 import ast
 import shutil
 
@@ -62,18 +60,31 @@ def create_table_from_json(path, database, table_name=None):
             print(f'Command failed with exit code: {e.returncode}')
     if table_name is None:
         table_name = os.path.splitext(os.path.basename(path))[0]
-    table_path = os.path.join(DATA_PATH, database, table_name)
-    if not os.path.exists(table_path):
-        os.makedirs(table_path)
+    table_path = Path(DATA_PATH / database / table_name)
+    if not table_path.exists():
+        Path.mkdir(table_path)
 
-    total_rows = wc(path)
-    n_partitions = math.ceil(os.path.getsize(path) / (1024 ** 2) / 100)
-    n_rows = int(total_rows / n_partitions)
+    # first write to csv, as JSON is much larger than csv due to repeated headers for each line
+    output_csv_path = table_path / 'output.csv'
+    if not output_csv_path.exists():
+        Path.touch(output_csv_path)
+    
+    with open(output_csv_path, 'w', newline='') as csv_file:
+        csv_writer = csv.writer(csv_file)
+        with open(path, 'r') as json_file:
+            for line in json_file:
+                json_data = json.loads(line)
+                if json_data and not csv_writer:
+                    csv_writer.writerow(json_data.keys())
+                csv_writer.writerow([json_data.get(key, '') for key in json_data.keys()])
 
-    for i in range(0, n_partitions):
-        data = pl.scan_ndjson(path, batch_size=n_rows)
-        name = f'{table_name}_{str(i)}.parquet'
-        data.write_parquet(os.path.join(table_path, name))
+
+    create_table_from_csv(
+        path=output_csv_path,
+        database=database,
+        table_name=table_name
+    )
+    os.remove(output_csv_path)
 
 def infer_datatypes(type):
     '''Returns Polars datatype for creating table schema'''

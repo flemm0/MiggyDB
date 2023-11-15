@@ -50,8 +50,25 @@ class DatabaseCLI(Cmd):
                         )
                         if len(args) == 5:
                             self.tables.append(args[-1])
+                            print(f'Table {args[-1]} successfully created')
                         else:
                             self.tables.append(Path(args[3]).stem)
+                            print(f'Table {Path(args[3]).stem} successfully created')
+                    except Exception as e:
+                        print(f'An error occurred: {e}')
+                elif args[1] == 'from' and args[2] == 'json':
+                    try:
+                        utils.create_table_from_json(
+                            path=ast.literal_eval(args[3]),
+                            database=self.current_db,
+                            table_name=args[-1] if len(args) == 5 else None
+                        )
+                        if len(args) == 5:
+                            self.tables.append(args[-1])
+                            print(f'Table {args[-1]} successfully created')
+                        else:
+                            self.tables.append(Path(args[3]).stem)
+                            print(f'Table {Path(args[3]).stem} successfully created')
                     except Exception as e:
                         print(f'An error occurred: {e}')
                 else:
