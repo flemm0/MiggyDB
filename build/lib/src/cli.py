@@ -28,19 +28,25 @@ class DatabaseCLI(Cmd):
         self.tables = None
 
     def do_new(self, arg):
-        '''argument parser for creating a new database'''
+        '''argument parser for creating a new database or new table'''
         args = arg.split()
+        # create new database if 'db' or 'database' in the input string
         if args[0] in ['db', 'database']:
-            Path.mkdir(DATA_PATH / args[1])
-            self.dbs.append(args[1])
-            if (DATA_PATH / args[1]).exists():
-                print(f'Database {args[1]} successfully created')
+            if Path(DATA_PATH / args[1]).exists():
+                print(f'Database {args[1]} already exists.')
+            else:
+                Path.mkdir(DATA_PATH / args[1])
+                self.dbs.append(args[1])
+                if (DATA_PATH / args[1]).exists():
+                    print(f'Database {args[1]} successfully created!')
+        # create new table in 'table' in the input string
         elif args[0] == 'table':
             if self.current_db is None:
                 print(f'Database not set. Please specify a database for the new table.')
             elif args[1] in self.tables:
                 print(f'Table {args[2]} already exists.')
             else:
+                # handle parsing entire csv file into MiggyDB table
                 if args[1] == 'from' and args[2] == 'csv':
                     try:
                         utils.create_table_from_csv(
@@ -56,6 +62,7 @@ class DatabaseCLI(Cmd):
                             print(f'Table {Path(args[3]).stem} successfully created')
                     except Exception as e:
                         print(f'An error occurred: {e}')
+                # handle parsing JSON file into MiggyDB table
                 elif args[1] == 'from' and args[2] == 'json':
                     try:
                         utils.create_table_from_json(
@@ -71,6 +78,7 @@ class DatabaseCLI(Cmd):
                             print(f'Table {Path(args[3]).stem} successfully created')
                     except Exception as e:
                         print(f'An error occurred: {e}')
+                # manual creation of new table
                 else:
                     if len(args) < 3:
                         print('Invalid input. Please provide a table name, and at least one column name followed by its data type')
@@ -81,11 +89,11 @@ class DatabaseCLI(Cmd):
                         schema = [(x[0], utils.infer_datatypes(x[1])) for x in schema]
                         utils.create_table_from_cli(database=self.current_db, table_name=args[1], schema=schema)
                         self.tables.append(args[1])
-                        print(f'Table {args[1]} successfully created')
+                        print(f'Table {args[1]} successfully created.')
                     except Exception as e:
                         print('An error occurred: {e}')
         else:
-            print('Unrecognized command')
+            print('Unrecognized command.')
 
     def do_show(self, arg):
         '''argument parser for viewing existing databases and tables'''
@@ -103,7 +111,7 @@ class DatabaseCLI(Cmd):
         '''
         arugment parser for switching to a database
         sets the path to the database to be queried
-        loads tables names from database into memory.
+        loads tables names from database into memory
         '''
         args = arg.split()
         if args[0] in ['db', 'database']:
@@ -122,6 +130,7 @@ class DatabaseCLI(Cmd):
     def do_add(self, arg):
         '''
         argument parser for insering values into a table
+        add rows to <table name> (<value>, <value>, <value>, ...)
         '''
         if self.current_db is None:
             print('Database not set. Please set a database before inserting into table')
@@ -147,6 +156,8 @@ class DatabaseCLI(Cmd):
     def do_obliterate(self, arg):
         '''
         argument parser to remove a table or database
+        `obliterate <table name>`
+        `obliterate <database>`
         '''
         args = arg.split()
         if args[0] in ['db', 'database']:
@@ -177,7 +188,7 @@ class DatabaseCLI(Cmd):
     def do_remove(self, arg):
         '''
         argument parser to remove rows from table given filter condition
-        remove rows from <table> filter (<co>, <op>, <val>)
+        remove rows from <table> filter (<column>, <operator>, <value>)
         '''
         if self.current_db is None:
             print('Database not set. Please set a database before inserting into table')
@@ -222,7 +233,6 @@ class DatabaseCLI(Cmd):
     def do_amend(self, arg):
         '''
         argument parser to modify values in a table
-        supports only 1 condition for now
         '''
         keywords = ['amend', 'filter', 'set', 'to']
         pattern = r'({})'.format('|'.join(map(re.escape, keywords)))
@@ -273,6 +283,10 @@ class DatabaseCLI(Cmd):
             print(f'An exception occurred: {e}')
 
     def parse_from_join(self, query_dict):
+        '''
+        parse the table selection potion of query
+        compatible with 1 or two tables (for joining)
+        '''
         table_name = query_dict['from'] if '+' not in query_dict['from'] else query_dict['from'].split(' + ')[0]
         join_table_name = query_dict['from'].split(' + ')[1].split('by')[0].strip() if '+' in query_dict['from'] else None
         if join_table_name:
@@ -310,6 +324,7 @@ class DatabaseCLI(Cmd):
             return list(ast.literal_eval(filter_str))
     
     def parse_group_agg(self, query_dict):
+        '''parse the grouping and aggregation portion of query'''
         group_col = query_dict['group'] if 'group' in query_dict.keys() else None
         if 'agg' in query_dict.keys():
             agg_vals = re.findall(r'([a-zA-Z]+)\((.*)\)', query_dict['agg'])[0]
@@ -320,6 +335,11 @@ class DatabaseCLI(Cmd):
         return group_col, agg_col, agg_func
     
     def parse_sort(self, query_dict):
+        '''
+        parse the sort column of query
+        supports only 1 column
+        support sorting ascending and descending
+        '''
         if 'sort' not in query_dict.keys():
             return None, False
         else:
@@ -330,6 +350,7 @@ class DatabaseCLI(Cmd):
         
     
     def parse_projection(self, query_dict):
+        '''parse the projection portion of query'''
         if 'gimme' not in query_dict.keys():
             return []
         else:
@@ -346,21 +367,13 @@ class DatabaseCLI(Cmd):
             
     def do_query(self, arg):
         '''
-        Example:
-        gimme <col a>, <col b>, <col c>
-        from <table> <+ join table by col a> e.g. employees + departments by id
-        filter <expr> e.g. (age gt 10), (name eq 'john')
-        group <col>
-        agg <expr> count(age)
-        grpfilt <expr> e.g. (count(age) > 10)
-        sort <col>
-        trunc <int>
-        skip <int>
+        function to parse query arguments and execute query logic
         '''
         start_time = time.time()
         if self.current_db is None:
             print('No database selected. Please use the "use" command to select a database')
             return
+        # list of query keywords to parse from input argument string
         keywords = [
             'gimme',
             'from',
@@ -374,6 +387,7 @@ class DatabaseCLI(Cmd):
         ]
         pattern = r'({})'.format('|'.join(map(re.escape, keywords)))
         result = list(filter(None, re.split(pattern, arg)))
+        # construct dictionary to hold all query arguments
         query_dict, key = {}, None
         for item in result:
             if item in keywords:
@@ -414,11 +428,12 @@ class DatabaseCLI(Cmd):
                     if col not in [group_col, f'{agg_func}({agg_col})']:
                         print('Error: columns in projection must either be the grouping column or the aggregated column')
                         return
-            if sort_col is not None and sort_col not in columns[1]:
-                print('Error: if sort column is given an alias, must pass the alias to the sort clause')
-                return
-        
+                if sort_col is not None and sort_col not in columns[1]:
+                    print('Error: if sort column is given an alias, must pass the alias to the sort clause')
+                    return
+        # query execution
         try:
+            # generate random query id for every query
             query_id = 'query_' + datetime.datetime.now().strftime("%y%m%d_%H%M%S") 
             query_path = Path(TEMP_DB_PATH / query_id)
 
@@ -440,7 +455,7 @@ class DatabaseCLI(Cmd):
             )
             n_rows = result_dataset.count_rows()
             n_cols = len(result_dataset.schema.names)
-
+            # if no limit/offset return head of first partition and tail of last partition, as much as can be read into memory
             if offset is None and limit is None:
                 print(f'{n_rows} rows\t{n_cols} columns')
                 # if dataset is only 1 file, read first partition
@@ -499,7 +514,10 @@ class DatabaseCLI(Cmd):
             print(f'Elapsed time: {elapsed_time:.4f} seconds')
 
     def do_copy(self, arg):
-        """Usage: copy (query ...) to 'output.csv'"""
+        """
+        Usage: copy (query ...) to 'output.csv'
+        use to copy query results to csv file
+        """
         if self.current_db is None:
             print('No database selected. Please use the "use" command to select a database')
             return
